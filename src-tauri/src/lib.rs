@@ -489,21 +489,14 @@ fn maybe_open_devtools(window: &WebviewWindow, enabled: bool) {
     if !enabled {
         return;
     }
-
-    #[cfg(debug_assertions)]
-    {
-        window.open_devtools();
-    }
+    window.open_devtools();
 }
 
 fn toggle_devtools(window: &WebviewWindow) {
-    #[cfg(debug_assertions)]
-    {
-        if window.is_devtools_open() {
-            window.close_devtools();
-        } else {
-            window.open_devtools();
-        }
+    if window.is_devtools_open() {
+        window.close_devtools();
+    } else {
+        window.open_devtools();
     }
 }
 
