@@ -168,23 +168,6 @@ fn resolve_backend_path(app: &AppHandle) -> Result<PathBuf, String> {
     Err("Error: carta_backend binary not found".to_string())
 }
 
-fn resolve_frontend_folder(app: &AppHandle, backend_path: &Path) -> Result<PathBuf, String> {
-    if let Some(bin_dir) = backend_path.parent() {
-        let candidate = bin_dir.join("..").join("..");
-        if candidate.join("index.html").exists() || candidate.join("dist").exists() {
-            return Ok(candidate);
-        }
-    }
-
-    if cfg!(debug_assertions) {
-        if let Ok(cwd) = std::env::current_dir() {
-            return Ok(cwd);
-        }
-    }
-
-    app.path().resource_dir().map_err(|err| err.to_string())
-}
-
 fn run_backend_help(app: &AppHandle, version: bool) -> Result<(), String> {
     let backend_path = resolve_backend_path(app)?;
     let mut cmd = Command::new(backend_path);
@@ -214,13 +197,11 @@ fn spawn_backend(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let backend_path =
         resolve_backend_path(app).map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
-    let frontend_folder = resolve_frontend_folder(app, &backend_path)
-        .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
 
     let mut cmd = Command::new(backend_path);
     cmd.arg(base_dir)
         .arg(format!("--port={}", state.backend_port))
-        .arg(format!("--frontend_folder={}", frontend_folder.display()))
+        .arg("--no_frontend")
         .arg("--no_browser")
         .args(extra_args)
         .env("CARTA_AUTH_TOKEN", &state.backend_token)
