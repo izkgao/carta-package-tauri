@@ -147,20 +147,12 @@ fn backend_filename() -> String {
 
 fn resolve_backend_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let candidate = resource_dir.join("bin").join(backend_filename());
+        let candidate = resource_dir.join("backend").join("bin").join(backend_filename());
         if candidate.exists() {
             return Ok(candidate);
         }
     }
-
-    if let Ok(cwd) = std::env::current_dir() {
-        let candidate = cwd.join("src-tauri").join("bin").join(backend_filename());
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    Err("Error: carta_backend binary not found".to_string())
+    Err("Error: backend/bin/carta_backend binary not found".to_string())
 }
 
 fn run_backend_help(app: &AppHandle, version: bool) -> Result<(), String> {
@@ -203,9 +195,9 @@ fn spawn_backend(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    if let Some(casa_path) = resolve_casa_path(app, &backend_path) {
-        cmd.env("CASAPATH", casa_path);
-    }
+    let casa_path = resolve_casa_path(app, &backend_path)
+        .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
+    cmd.env("CASAPATH", casa_path);
 
     let mut child = cmd.spawn()?;
 
@@ -260,45 +252,20 @@ fn pipe_output<T: std::io::Read + Send + 'static>(reader: T, is_stderr: bool) {
     });
 }
 
-fn resolve_casa_path(app: &AppHandle, backend_path: &Path) -> Option<String> {
+fn resolve_casa_path(app: &AppHandle, backend_path: &Path) -> Result<String, String> {
     let etc_path = resolve_etc_path(app, backend_path)?;
     let resolved = fs::canonicalize(&etc_path).unwrap_or(etc_path);
-    Some(format!("../../../../../{} linux", resolved.display()))
+    Ok(format!("../../../../../{} linux", resolved.display()))
 }
 
-fn resolve_etc_path(app: &AppHandle, backend_path: &Path) -> Option<PathBuf> {
+fn resolve_etc_path(_app: &AppHandle, backend_path: &Path) -> Result<PathBuf, String> {
     if let Some(bin_dir) = backend_path.parent() {
         let candidate = bin_dir.join("..").join("etc");
         if candidate.exists() {
-            return Some(candidate);
+            return Ok(candidate);
         }
     }
-
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let candidate = resource_dir.join("resources").join("etc");
-        if candidate.exists() {
-            return Some(candidate);
-        }
-
-        let candidate = resource_dir.join("etc");
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    if let Ok(cwd) = std::env::current_dir() {
-        let candidate = cwd.join("src-tauri").join("etc");
-        if candidate.exists() {
-            return Some(candidate);
-        }
-
-        let candidate = cwd.join("etc");
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    Err("Error: backend/etc directory not found".to_string())
 }
 
 fn window_state_path(app: &AppHandle) -> Option<PathBuf> {
@@ -502,7 +469,7 @@ pub fn run() {
     };
     let backend_token = uuid::Uuid::new_v4().to_string();
     let window_url = format!(
-        "dist/index.html?socketUrl=ws://localhost:{}&token={}",
+        "src-tauri/frontend/index.html?socketUrl=ws://localhost:{}&token={}",
         backend_port, backend_token
     );
 

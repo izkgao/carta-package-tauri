@@ -19,9 +19,10 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "bin/carta_backend",
-      "etc/**/*",
-      "libs/**/*"
+      "backend/bin/carta_backend",
+      "backend/etc/**/*",
+      "backend/libs/**/*",
+      "frontend/**/*"
     ],
     "icon": [
       "icons/32x32.png",
