@@ -2,9 +2,11 @@
 use std::{
     fs,
     io::{self, BufRead, BufReader},
+    net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
+    time::{Duration, Instant},
 };
 
 use tauri::{
@@ -216,6 +218,33 @@ fn spawn_backend(
 
     *state.backend.lock().unwrap() = Some(child);
     Ok(())
+}
+
+fn wait_for_backend(port: u16, timeout: Duration) -> io::Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let start = Instant::now();
+    let mut last_error: Option<io::Error> = None;
+
+    while start.elapsed() < timeout {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
+            Ok(_) => return Ok(()),
+            Err(err) => last_error = Some(err),
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let detail = last_error
+        .map(|err| format!(" ({})", err))
+        .unwrap_or_default();
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!(
+            "Error: Backend not ready on port {} after {}s{}",
+            port,
+            timeout.as_secs(),
+            detail
+        ),
+    ))
 }
 
 fn pipe_output<T: std::io::Read + Send + 'static>(reader: T, is_stderr: bool) {
@@ -505,6 +534,10 @@ pub fn run() {
 
             let state = app.state::<AppState>();
             spawn_backend(app.handle(), &state, &base_dir, &extra_args)?;
+            if let Err(err) = wait_for_backend(state.backend_port, Duration::from_secs(20)) {
+                shutdown_backend(&state);
+                return Err(err.into());
+            }
             create_window(app.handle(), &state, "main".to_string())?;
             Ok(())
         })
