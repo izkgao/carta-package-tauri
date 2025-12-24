@@ -290,16 +290,20 @@ fn save_window_bounds(app: &AppHandle, window: &Window) {
         return;
     };
 
-    let (pos, size) = match (window.outer_position(), window.inner_size()) {
-        (Ok(pos), Ok(size)) => (pos, size),
+    let (pos, size, scale) = match (
+        window.outer_position(),
+        window.inner_size(),
+        window.scale_factor(),
+    ) {
+        (Ok(pos), Ok(size), Ok(scale)) => (pos, size, scale),
         _ => return,
     };
 
     let bounds = WindowBounds {
-        width: size.width,
-        height: size.height,
-        x: pos.x,
-        y: pos.y,
+        width: (size.width as f64 / scale) as u32,
+        height: (size.height as f64 / scale) as u32,
+        x: (pos.x as f64 / scale) as i32,
+        y: (pos.y as f64 / scale) as i32,
     };
 
     if let Some(parent) = path.parent() {
@@ -321,12 +325,16 @@ fn next_window_bounds(app: &AppHandle) -> WindowBounds {
     if let Some(window) =
         focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
     {
-        if let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) {
+        if let (Ok(pos), Ok(size), Ok(scale)) = (
+            window.outer_position(),
+            window.inner_size(),
+            window.scale_factor(),
+        ) {
             return WindowBounds {
-                width: size.width,
-                height: size.height,
-                x: pos.x + WINDOW_OFFSET,
-                y: pos.y + WINDOW_OFFSET,
+                width: (size.width as f64 / scale) as u32,
+                height: (size.height as f64 / scale) as u32,
+                x: (pos.x as f64 / scale) as i32 + WINDOW_OFFSET,
+                y: (pos.y as f64 / scale) as i32 + WINDOW_OFFSET,
             };
         }
     }
@@ -503,8 +511,8 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { .. } = event {
                 let app = window.app_handle();
-                save_window_bounds(app, window);
                 if app.webview_windows().len() <= 1 {
+                    save_window_bounds(app, window);
                     app.exit(0);
                 }
             }
