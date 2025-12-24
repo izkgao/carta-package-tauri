@@ -9,8 +9,8 @@ use std::{
 
 use tauri::{
     menu::{MenuBuilder, MenuItem, SubmenuBuilder},
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, Runtime, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder, Window, WindowEvent,
+    AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window,
+    WindowEvent,
 };
 
 const DEFAULT_WINDOW_WIDTH: u32 = 1920;
@@ -41,11 +41,6 @@ struct AppState {
     backend_token: String,
     window_url: String,
     inspect: bool,
-}
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
 fn parse_cli_args() -> CliArgs {
@@ -131,12 +126,10 @@ fn resolve_base_directory(input_path: Option<&str>) -> Result<PathBuf, String> {
         } else {
             Err("Error: Requested path is neither a file nor a directory".to_string())
         }
+    } else if cfg!(target_os = "macos") && cwd == Path::new("/") {
+        home_dir().ok_or_else(|| "Error: HOME directory not found".to_string())
     } else {
-        if cfg!(target_os = "macos") && cwd == Path::new("/") {
-            home_dir().ok_or_else(|| "Error: HOME directory not found".to_string())
-        } else {
-            Ok(cwd)
-        }
+        Ok(cwd)
     }
 }
 
@@ -228,7 +221,7 @@ fn spawn_backend(
 fn pipe_output<T: std::io::Read + Send + 'static>(reader: T, is_stderr: bool) {
     std::thread::spawn(move || {
         let buf = BufReader::new(reader);
-        for line in buf.lines().flatten() {
+        for line in buf.lines().map_while(Result::ok) {
             if is_stderr {
                 eprintln!("{}", line);
             } else {
@@ -297,7 +290,7 @@ fn save_window_bounds(app: &AppHandle, window: &Window) {
         return;
     };
 
-    let (pos, size) = match (window.outer_position(), window.outer_size()) {
+    let (pos, size) = match (window.outer_position(), window.inner_size()) {
         (Ok(pos), Ok(size)) => (pos, size),
         _ => return,
     };
@@ -325,16 +318,16 @@ fn focused_window(app: &AppHandle) -> Option<WebviewWindow> {
 }
 
 fn next_window_bounds(app: &AppHandle) -> WindowBounds {
-    if !app.webview_windows().is_empty() {
-        if let Some(window) = focused_window(app) {
-            if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
-                return WindowBounds {
-                    width: size.width,
-                    height: size.height,
-                    x: pos.x + WINDOW_OFFSET,
-                    y: pos.y + WINDOW_OFFSET,
-                };
-            }
+    if let Some(window) =
+        focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
+    {
+        if let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) {
+            return WindowBounds {
+                width: size.width,
+                height: size.height,
+                x: pos.x + WINDOW_OFFSET,
+                y: pos.y + WINDOW_OFFSET,
+            };
         }
     }
 
@@ -351,14 +344,13 @@ fn new_window_label() -> String {
 }
 
 fn create_window(app: &AppHandle, state: &AppState, label: String) -> tauri::Result<WebviewWindow> {
+    let bounds = next_window_bounds(app);
     let url = WebviewUrl::App(state.window_url.clone().into());
     let window = WebviewWindowBuilder::new(app, label, url)
         .title("CARTA")
+        .inner_size(bounds.width as f64, bounds.height as f64)
+        .position(bounds.x as f64, bounds.y as f64)
         .build()?;
-
-    let bounds = next_window_bounds(app);
-    let _ = window.set_size(PhysicalSize::new(bounds.width, bounds.height));
-    let _ = window.set_position(PhysicalPosition::new(bounds.x, bounds.y));
 
     maybe_open_devtools(&window, state.inspect);
     Ok(window)
@@ -489,8 +481,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![greet])
-        .menu(|app| build_menu(app))
+        .invoke_handler(tauri::generate_handler![])
+        .menu(build_menu)
         .on_menu_event(|app, event| {
             let state = app.state::<AppState>();
             handle_menu_event(app, &state, event);
@@ -511,7 +503,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { .. } = event {
                 let app = window.app_handle();
-                save_window_bounds(&app, window);
+                save_window_bounds(app, window);
                 if app.webview_windows().len() <= 1 {
                     app.exit(0);
                 }
