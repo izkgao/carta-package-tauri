@@ -198,7 +198,7 @@ fn spawn_backend(
     let backend_path =
         resolve_backend_path(app).map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
 
-    let mut cmd = Command::new(backend_path);
+    let mut cmd = Command::new(&backend_path);
     cmd.arg(base_dir)
         .arg(format!("--port={}", state.backend_port))
         .arg("--no_frontend")
@@ -207,6 +207,10 @@ fn spawn_backend(
         .env("CARTA_AUTH_TOKEN", &state.backend_token)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if let Some(casa_path) = resolve_casa_path(app, &backend_path) {
+        cmd.env("CASAPATH", casa_path);
+    }
 
     let mut child = cmd.spawn()?;
 
@@ -232,6 +236,47 @@ fn pipe_output<T: std::io::Read + Send + 'static>(reader: T, is_stderr: bool) {
             }
         }
     });
+}
+
+fn resolve_casa_path(app: &AppHandle, backend_path: &Path) -> Option<String> {
+    let etc_path = resolve_etc_path(app, backend_path)?;
+    let resolved = fs::canonicalize(&etc_path).unwrap_or(etc_path);
+    Some(format!("../../../../../{} linux", resolved.display()))
+}
+
+fn resolve_etc_path(app: &AppHandle, backend_path: &Path) -> Option<PathBuf> {
+    if let Some(bin_dir) = backend_path.parent() {
+        let candidate = bin_dir.join("..").join("etc");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let candidate = resource_dir.join("resources").join("etc");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+
+        let candidate = resource_dir.join("etc");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        let candidate = cwd.join("src-tauri").join("etc");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+
+        let candidate = cwd.join("etc");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 fn window_state_path(app: &AppHandle) -> Option<PathBuf> {
