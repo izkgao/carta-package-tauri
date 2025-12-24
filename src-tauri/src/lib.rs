@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{self, BufRead, BufReader},
     net::{SocketAddr, TcpStream},
+    os::unix::fs as unix_fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -147,7 +148,10 @@ fn backend_filename() -> String {
 
 fn resolve_backend_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let candidate = resource_dir.join("backend").join("bin").join(backend_filename());
+        let candidate = resource_dir
+            .join("backend")
+            .join("bin")
+            .join(backend_filename());
         if candidate.exists() {
             return Ok(candidate);
         }
@@ -155,20 +159,62 @@ fn resolve_backend_path(app: &AppHandle) -> Result<PathBuf, String> {
     Err("Error: backend/bin/carta_backend binary not found".to_string())
 }
 
-fn resolve_casa_path(app: &AppHandle, backend_path: &Path) -> Result<String, String> {
-    let etc_path = resolve_etc_path(app, backend_path)?;
-    let resolved = fs::canonicalize(&etc_path).unwrap_or(etc_path);
-    Ok(format!("../../../../../{} linux", resolved.display()))
+fn resolve_casa_path(backend_path: &Path) -> Result<String, String> {
+    let etc_path = resolve_etc_path(backend_path)?;
+    Ok(format!("../../../../../{} linux", etc_path.display()))
 }
 
-fn resolve_etc_path(_app: &AppHandle, backend_path: &Path) -> Result<PathBuf, String> {
-    if let Some(bin_dir) = backend_path.parent() {
+fn resolve_etc_path(backend_path: &Path) -> Result<PathBuf, String> {
+    let etc_path = if let Some(bin_dir) = backend_path.parent() {
         let candidate = bin_dir.join("..").join("etc");
         if candidate.exists() {
-            return Ok(candidate);
+            candidate
+        } else {
+            return Err("Error: backend/etc directory not found".to_string());
         }
+    } else {
+        return Err("Error: backend/etc directory not found".to_string());
+    };
+
+    let resolved = fs::canonicalize(&etc_path).unwrap_or(etc_path);
+
+    // If the etc path itself does not contain spaces, use the real path directly
+    if !path_has_space(&resolved) {
+        return Ok(resolved);
     }
-    Err("Error: backend/etc directory not found".to_string())
+
+    // If the etc path contains spaces, try to create a symlink in /tmp
+    let base_dir = PathBuf::from("/tmp");
+    let _ = fs::create_dir_all(&base_dir);
+    let link_path = base_dir.join("carta-etc");
+
+    if let Ok(metadata) = fs::symlink_metadata(&link_path) {
+        if !metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "symlink path already exists",
+            )
+            .to_string());
+        }
+
+        if let Ok(existing) = fs::read_link(&link_path) {
+            if existing == resolved {
+                return Ok(link_path);
+            }
+        }
+
+        let _ = fs::remove_file(&link_path);
+    }
+
+    if unix_fs::symlink(&resolved, &link_path).is_ok() {
+        Ok(link_path)
+    } else {
+        Ok(resolved)
+    }
+}
+
+fn path_has_space(path: &Path) -> bool {
+    path.to_string_lossy().contains(' ')
 }
 
 fn resolve_frontend_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -223,7 +269,7 @@ fn spawn_backend(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let casa_path = resolve_casa_path(app, &backend_path)
+    let casa_path = resolve_casa_path(&backend_path)
         .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
     cmd.env("CASAPATH", casa_path);
 
@@ -480,10 +526,7 @@ pub fn run() {
         }
     };
     let backend_token = uuid::Uuid::new_v4().to_string();
-    let window_url = format!(
-        "http://localhost:{}/?token={}",
-        backend_port, backend_token
-    );
+    let window_url = format!("http://localhost:{}/?token={}", backend_port, backend_token);
 
     let state = AppState {
         backend: Mutex::new(None),
