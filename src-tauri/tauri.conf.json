@@ -3,12 +3,6 @@
   "productName": "CARTA",
   "version": "4.1.0",
   "identifier": "com.carta.app",
-  "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
-  },
   "app": {
     "withGlobalTauri": true,
     "security": {

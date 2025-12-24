@@ -155,6 +155,32 @@ fn resolve_backend_path(app: &AppHandle) -> Result<PathBuf, String> {
     Err("Error: backend/bin/carta_backend binary not found".to_string())
 }
 
+fn resolve_casa_path(app: &AppHandle, backend_path: &Path) -> Result<String, String> {
+    let etc_path = resolve_etc_path(app, backend_path)?;
+    let resolved = fs::canonicalize(&etc_path).unwrap_or(etc_path);
+    Ok(format!("../../../../../{} linux", resolved.display()))
+}
+
+fn resolve_etc_path(_app: &AppHandle, backend_path: &Path) -> Result<PathBuf, String> {
+    if let Some(bin_dir) = backend_path.parent() {
+        let candidate = bin_dir.join("..").join("etc");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err("Error: backend/etc directory not found".to_string())
+}
+
+fn resolve_frontend_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let candidate = resource_dir.join("frontend");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err("Error: frontend directory not found".to_string())
+}
+
 fn run_backend_help(app: &AppHandle, version: bool) -> Result<(), String> {
     let backend_path = resolve_backend_path(app)?;
     let mut cmd = Command::new(backend_path);
@@ -184,11 +210,13 @@ fn spawn_backend(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let backend_path =
         resolve_backend_path(app).map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
+    let frontend_path =
+        resolve_frontend_path(app).map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
 
     let mut cmd = Command::new(&backend_path);
     cmd.arg(base_dir)
         .arg(format!("--port={}", state.backend_port))
-        .arg("--no_frontend")
+        .arg(format!("--frontend_folder={}", frontend_path.display()))
         .arg("--no_browser")
         .args(extra_args)
         .env("CARTA_AUTH_TOKEN", &state.backend_token)
@@ -250,22 +278,6 @@ fn pipe_output<T: std::io::Read + Send + 'static>(reader: T, is_stderr: bool) {
             }
         }
     });
-}
-
-fn resolve_casa_path(app: &AppHandle, backend_path: &Path) -> Result<String, String> {
-    let etc_path = resolve_etc_path(app, backend_path)?;
-    let resolved = fs::canonicalize(&etc_path).unwrap_or(etc_path);
-    Ok(format!("../../../../../{} linux", resolved.display()))
-}
-
-fn resolve_etc_path(_app: &AppHandle, backend_path: &Path) -> Result<PathBuf, String> {
-    if let Some(bin_dir) = backend_path.parent() {
-        let candidate = bin_dir.join("..").join("etc");
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    Err("Error: backend/etc directory not found".to_string())
 }
 
 fn window_state_path(app: &AppHandle) -> Option<PathBuf> {
@@ -469,7 +481,7 @@ pub fn run() {
     };
     let backend_token = uuid::Uuid::new_v4().to_string();
     let window_url = format!(
-        "src-tauri/frontend/index.html?socketUrl=ws://localhost:{}&token={}",
+        "http://localhost:{}/?token={}",
         backend_port, backend_token
     );
 
