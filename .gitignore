@@ -23,7 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-dist/
+# Backend
 src-tauri/bin/
 src-tauri/libs/
 src-tauri/etc/
