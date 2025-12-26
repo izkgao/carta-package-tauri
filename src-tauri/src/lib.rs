@@ -118,12 +118,11 @@ fn parse_cli_args() -> CliArgs {
             "--version" | "-v" => result.version = true,
             s if s.starts_with('-') => {
                 result.extra_args.push(arg.clone());
-                if !s.contains('=') {
-                    if let Some(next) = iter.peek() {
-                        if !next.starts_with('-') {
-                            result.extra_args.push(iter.next().unwrap().clone());
-                        }
-                    }
+                if !s.contains('=')
+                    && let Some(next) = iter.peek()
+                    && !next.starts_with('-')
+                {
+                    result.extra_args.push(iter.next().unwrap().clone());
                 }
             }
             _ if result.input_path.is_none() => result.input_path = Some(arg.clone()),
@@ -215,10 +214,8 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<PathBuf> {
             return Err("symlink path already exists".into());
         }
 
-        if let Ok(existing) = fs::read_link(&link_path) {
-            if existing == resolved {
-                return Ok(link_path);
-            }
+        if let Ok(existing) = fs::read_link(&link_path) && existing == resolved {
+            return Ok(link_path);
         }
 
         let _ = fs::remove_file(&link_path);
