@@ -12,8 +12,8 @@ use std::{
 
 use tauri::{
     menu::{MenuBuilder, MenuItem, SubmenuBuilder},
-    AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window,
-    WindowEvent,
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, Runtime, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, Window, WindowEvent,
 };
 
 const DEFAULT_WINDOW_WIDTH: u32 = 1920;
@@ -36,6 +36,23 @@ struct WindowBounds {
     height: u32,
     x: i32,
     y: i32,
+}
+
+impl WindowBounds {
+    fn new(pos: PhysicalPosition<i32>, size: PhysicalSize<u32>, scale: f64) -> Self {
+        Self {
+            width: (size.width as f64 / scale) as u32,
+            height: (size.height as f64 / scale) as u32,
+            x: (pos.x as f64 / scale) as i32,
+            y: (pos.y as f64 / scale) as i32,
+        }
+    }
+
+    fn with_offset(mut self, offset: i32) -> Self {
+        self.x += offset;
+        self.y += offset;
+        self
+    }
 }
 
 struct AppState {
@@ -343,23 +360,15 @@ fn save_window_bounds(app: &AppHandle, window: &Window) {
     let Some(path) = window_state_path(app) else {
         return;
     };
-
-    let (pos, size, scale) = match (
+    let (Ok(pos), Ok(size), Ok(scale)) = (
         window.outer_position(),
         window.inner_size(),
         window.scale_factor(),
-    ) {
-        (Ok(pos), Ok(size), Ok(scale)) => (pos, size, scale),
-        _ => return,
+    ) else {
+        return;
     };
 
-    let bounds = WindowBounds {
-        width: (size.width as f64 / scale) as u32,
-        height: (size.height as f64 / scale) as u32,
-        x: (pos.x as f64 / scale) as i32,
-        y: (pos.y as f64 / scale) as i32,
-    };
-
+    let bounds = WindowBounds::new(pos, size, scale);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -376,29 +385,21 @@ fn focused_window(app: &AppHandle) -> Option<WebviewWindow> {
 }
 
 fn next_window_bounds(app: &AppHandle) -> WindowBounds {
-    if let Some(window) =
-        focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
-    {
-        if let (Ok(pos), Ok(size), Ok(scale)) = (
-            window.outer_position(),
-            window.inner_size(),
-            window.scale_factor(),
-        ) {
-            return WindowBounds {
-                width: (size.width as f64 / scale) as u32,
-                height: (size.height as f64 / scale) as u32,
-                x: (pos.x as f64 / scale) as i32 + WINDOW_OFFSET,
-                y: (pos.y as f64 / scale) as i32 + WINDOW_OFFSET,
-            };
-        }
-    }
-
-    load_window_bounds(app).unwrap_or(WindowBounds {
-        width: DEFAULT_WINDOW_WIDTH,
-        height: DEFAULT_WINDOW_HEIGHT,
-        x: 0,
-        y: 0,
-    })
+    focused_window(app)
+        .or_else(|| app.webview_windows().values().next().cloned())
+        .and_then(|w| {
+            let pos = w.outer_position().ok()?;
+            let size = w.inner_size().ok()?;
+            let scale = w.scale_factor().ok()?;
+            Some(WindowBounds::new(pos, size, scale).with_offset(WINDOW_OFFSET))
+        })
+        .or_else(|| load_window_bounds(app))
+        .unwrap_or(WindowBounds {
+            width: DEFAULT_WINDOW_WIDTH,
+            height: DEFAULT_WINDOW_HEIGHT,
+            x: 0,
+            y: 0,
+        })
 }
 
 fn new_window_label() -> String {
