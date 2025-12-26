@@ -1,7 +1,6 @@
 use std::{
     error::Error,
-    fmt,
-    fs,
+    fmt, fs,
     io::{self, BufRead, BufReader},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
@@ -11,9 +10,9 @@ use std::{
 };
 
 use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, Runtime, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, Window, WindowEvent,
     menu::{MenuBuilder, MenuItem, SubmenuBuilder},
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, Runtime, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, Window, WindowEvent,
 };
 
 const DEFAULT_WINDOW_WIDTH: u32 = 1920;
@@ -213,7 +212,9 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<PathBuf> {
             return Err("symlink path already exists".into());
         }
 
-        if let Ok(existing) = fs::read_link(&link_path) && existing == resolved {
+        if let Ok(existing) = fs::read_link(&link_path)
+            && existing == resolved
+        {
             return Ok(link_path);
         }
 
@@ -536,7 +537,10 @@ pub fn run() {
 
             let state = app.state::<AppState>();
             spawn_backend(app.handle(), &state, &base_dir, &extra_args)?;
-            if let Err(err) = wait_for_backend(state.backend_port, Duration::from_secs(BACKEND_TIMEOUT_SECS)) {
+            if let Err(err) = wait_for_backend(
+                state.backend_port,
+                Duration::from_secs(BACKEND_TIMEOUT_SECS),
+            ) {
                 shutdown_backend(&state);
                 return Err(err.into());
             }
