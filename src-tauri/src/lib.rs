@@ -22,6 +22,23 @@ const DEFAULT_WINDOW_WIDTH: u32 = 1920;
 const DEFAULT_WINDOW_HEIGHT: u32 = 1080;
 const WINDOW_OFFSET: i32 = 25;
 const WINDOW_STATE_FILE: &str = "window-state.json";
+const WINDOW_TITLE: &str = "CARTA";
+const MAIN_WINDOW_LABEL: &str = "main";
+
+const BACKEND_DIR: &str = "backend";
+const FRONTEND_DIR: &str = "frontend";
+const SYMLINK_BASE: &str = "/tmp";
+const SYMLINK_NAME: &str = "carta-etc";
+
+const ENV_AUTH_TOKEN: &str = "CARTA_AUTH_TOKEN";
+const ENV_CASAPATH: &str = "CASAPATH";
+
+const BACKEND_TIMEOUT_SECS: u64 = 20;
+const CONNECT_TIMEOUT_MS: u64 = 250;
+const CONNECT_RETRY_MS: u64 = 100;
+
+const MENU_NEW_WINDOW: &str = "new_window";
+const MENU_TOGGLE_DEVTOOLS: &str = "toggle_devtools";
 
 #[derive(Debug)]
 struct CliArgs {
@@ -193,7 +210,7 @@ fn backend_filename() -> String {
 fn resolve_backend_path(app: &AppHandle) -> AppResult<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let candidate = resource_dir
-            .join("backend")
+            .join(BACKEND_DIR)
             .join("bin")
             .join(backend_filename());
         if candidate.exists() {
@@ -223,9 +240,9 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<PathBuf> {
     }
 
     // If the etc path contains spaces, try to create a symlink in /tmp
-    let base_dir = PathBuf::from("/tmp");
+    let base_dir = PathBuf::from(SYMLINK_BASE);
     let _ = fs::create_dir_all(&base_dir);
-    let link_path = base_dir.join("carta-etc");
+    let link_path = base_dir.join(SYMLINK_NAME);
 
     if let Ok(metadata) = fs::symlink_metadata(&link_path) {
         if !metadata.file_type().is_symlink() {
@@ -254,7 +271,7 @@ fn path_has_space(path: &Path) -> bool {
 
 fn resolve_frontend_path(app: &AppHandle) -> AppResult<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let candidate = resource_dir.join("frontend");
+        let candidate = resource_dir.join(FRONTEND_DIR);
         if candidate.exists() {
             return Ok(candidate);
         }
@@ -293,12 +310,12 @@ fn spawn_backend(
         .arg(format!("--frontend_folder={}", frontend_path.display()))
         .arg("--no_browser")
         .args(extra_args)
-        .env("CARTA_AUTH_TOKEN", &state.backend_token)
+        .env(ENV_AUTH_TOKEN, &state.backend_token)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     let casa_path = resolve_casa_path(&backend_path)?;
-    cmd.env("CASAPATH", casa_path);
+    cmd.env(ENV_CASAPATH, casa_path);
 
     let mut child = cmd.spawn().map_err(AppError::from)?;
 
@@ -319,11 +336,11 @@ fn wait_for_backend(port: u16, timeout: Duration) -> AppResult<()> {
     let mut last_error: Option<io::Error> = None;
 
     while start.elapsed() < timeout {
-        match TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(CONNECT_TIMEOUT_MS)) {
             Ok(_) => return Ok(()),
             Err(err) => last_error = Some(err),
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(CONNECT_RETRY_MS));
     }
 
     let detail = last_error
@@ -417,7 +434,7 @@ fn create_window(app: &AppHandle, state: &AppState, label: String) -> tauri::Res
     let bounds = next_window_bounds(app);
     let url = WebviewUrl::App(state.window_url.clone().into());
     let window = WebviewWindowBuilder::new(app, label, url)
-        .title("CARTA")
+        .title(WINDOW_TITLE)
         .inner_size(bounds.width as f64, bounds.height as f64)
         .position(bounds.x as f64, bounds.y as f64)
         .build()?;
@@ -443,14 +460,14 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
     if cfg!(target_os = "macos") {
         let new_window = MenuItem::with_id(
             app,
-            "new_window",
+            MENU_NEW_WINDOW,
             "New CARTA Window",
             true,
             Some("CmdOrCtrl+N"),
         )?;
         let toggle_devtools = MenuItem::with_id(
             app,
-            "toggle_devtools",
+            MENU_TOGGLE_DEVTOOLS,
             "Toggle DevTools",
             true,
             Some("Alt+CmdOrCtrl+I"),
@@ -474,10 +491,10 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
 
 fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::MenuEvent) {
     match event.id().as_ref() {
-        "new_window" => {
+        MENU_NEW_WINDOW => {
             let _ = create_window(app, state, new_window_label());
         }
-        "toggle_devtools" => {
+        MENU_TOGGLE_DEVTOOLS => {
             if let Some(window) = focused_window(app) {
                 toggle_devtools(&window);
             }
@@ -557,11 +574,11 @@ pub fn run() {
 
             let state = app.state::<AppState>();
             spawn_backend(app.handle(), &state, &base_dir, &extra_args)?;
-            if let Err(err) = wait_for_backend(state.backend_port, Duration::from_secs(20)) {
+            if let Err(err) = wait_for_backend(state.backend_port, Duration::from_secs(BACKEND_TIMEOUT_SECS)) {
                 shutdown_backend(&state);
                 return Err(err.into());
             }
-            create_window(app.handle(), &state, "main".to_string())?;
+            create_window(app.handle(), &state, MAIN_WINDOW_LABEL.to_string())?;
             Ok(())
         })
         .on_window_event(|window, event| {
