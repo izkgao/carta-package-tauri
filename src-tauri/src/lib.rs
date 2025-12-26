@@ -5,7 +5,6 @@ use std::{
     fs,
     io::{self, BufRead, BufReader},
     net::{SocketAddr, TcpStream},
-    os::unix::fs as unix_fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -40,7 +39,7 @@ const CONNECT_RETRY_MS: u64 = 100;
 const MENU_NEW_WINDOW: &str = "new_window";
 const MENU_TOGGLE_DEVTOOLS: &str = "toggle_devtools";
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct CliArgs {
     input_path: Option<String>,
     extra_args: Vec<String>,
@@ -108,64 +107,31 @@ struct AppState {
 }
 
 fn parse_cli_args() -> CliArgs {
-    let mut input_path = None;
-    let mut extra_args = Vec::new();
-    let mut inspect = false;
-    let mut help = false;
-    let mut version = false;
-
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut i = 0;
-    while i < args.len() {
-        let arg = &args[i];
+    let mut result = CliArgs::default();
+    let mut iter = args.iter().peekable();
 
-        if arg == "--inspect" {
-            inspect = true;
-            i += 1;
-            continue;
-        }
-
-        if arg == "--help" || arg == "-h" {
-            help = true;
-            i += 1;
-            continue;
-        }
-
-        if arg == "--version" || arg == "-v" {
-            version = true;
-            i += 1;
-            continue;
-        }
-
-        if arg.starts_with('-') {
-            extra_args.push(arg.clone());
-            if !arg.contains('=') && i + 1 < args.len() {
-                let next = &args[i + 1];
-                if !next.starts_with('-') {
-                    extra_args.push(next.clone());
-                    i += 2;
-                    continue;
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--inspect" => result.inspect = true,
+            "--help" | "-h" => result.help = true,
+            "--version" | "-v" => result.version = true,
+            s if s.starts_with('-') => {
+                result.extra_args.push(arg.clone());
+                if !s.contains('=') {
+                    if let Some(next) = iter.peek() {
+                        if !next.starts_with('-') {
+                            result.extra_args.push(iter.next().unwrap().clone());
+                        }
+                    }
                 }
             }
-            i += 1;
-            continue;
+            _ if result.input_path.is_none() => result.input_path = Some(arg.clone()),
+            _ => result.extra_args.push(arg.clone()),
         }
-
-        if input_path.is_none() {
-            input_path = Some(arg.clone());
-        } else {
-            extra_args.push(arg.clone());
-        }
-        i += 1;
     }
 
-    CliArgs {
-        input_path,
-        extra_args,
-        inspect,
-        help,
-        version,
-    }
+    result
 }
 
 fn resolve_base_directory(input_path: Option<&str>) -> AppResult<PathBuf> {
@@ -258,11 +224,12 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<PathBuf> {
         let _ = fs::remove_file(&link_path);
     }
 
-    if unix_fs::symlink(&resolved, &link_path).is_ok() {
-        Ok(link_path)
-    } else {
-        Ok(resolved)
+    #[cfg(unix)]
+    if std::os::unix::fs::symlink(&resolved, &link_path).is_ok() {
+        return Ok(link_path);
     }
+
+    Ok(resolved)
 }
 
 fn path_has_space(path: &Path) -> bool {
@@ -511,10 +478,9 @@ fn shutdown_backend(state: &AppState) {
 }
 
 fn maybe_open_devtools(window: &WebviewWindow, enabled: bool) {
-    if !enabled {
-        return;
+    if enabled {
+        window.open_devtools();
     }
-    window.open_devtools();
 }
 
 fn toggle_devtools(window: &WebviewWindow) {
