@@ -1,5 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use std::{
+    error::Error,
+    fmt,
     fs,
     io::{self, BufRead, BufReader},
     net::{SocketAddr, TcpStream},
@@ -54,6 +56,31 @@ impl WindowBounds {
         self
     }
 }
+
+#[derive(Debug)]
+struct AppError(String);
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Error for AppError {}
+
+impl From<&str> for AppError {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<io::Error> for AppError {
+    fn from(err: io::Error) -> Self {
+        Self(err.to_string())
+    }
+}
+
+type AppResult<T> = Result<T, AppError>;
 
 struct AppState {
     backend: Mutex<Option<Child>>,
@@ -124,8 +151,8 @@ fn parse_cli_args() -> CliArgs {
     }
 }
 
-fn resolve_base_directory(input_path: Option<&str>) -> Result<PathBuf, String> {
-    let cwd = std::env::current_dir().map_err(|err| err.to_string())?;
+fn resolve_base_directory(input_path: Option<&str>) -> AppResult<PathBuf> {
+    let cwd = std::env::current_dir()?;
 
     if let Some(path) = input_path {
         let candidate = if Path::new(path).is_absolute() {
@@ -134,7 +161,7 @@ fn resolve_base_directory(input_path: Option<&str>) -> Result<PathBuf, String> {
             cwd.join(path)
         };
         let metadata = fs::metadata(&candidate)
-            .map_err(|_| "Error: Requested file or directory does not exist".to_string())?;
+            .map_err(|_| AppError::from("Requested file or directory does not exist"))?;
 
         if metadata.is_file() {
             Ok(candidate
@@ -144,10 +171,10 @@ fn resolve_base_directory(input_path: Option<&str>) -> Result<PathBuf, String> {
         } else if metadata.is_dir() {
             Ok(candidate)
         } else {
-            Err("Error: Requested path is neither a file nor a directory".to_string())
+            Err("Requested path is neither a file nor a directory".into())
         }
     } else if cfg!(target_os = "macos") && cwd == Path::new("/") {
-        home_dir().ok_or_else(|| "Error: HOME directory not found".to_string())
+        home_dir().ok_or_else(|| "HOME directory not found".into())
     } else {
         Ok(cwd)
     }
@@ -163,7 +190,7 @@ fn backend_filename() -> String {
     format!("carta_backend{}", std::env::consts::EXE_SUFFIX)
 }
 
-fn resolve_backend_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn resolve_backend_path(app: &AppHandle) -> AppResult<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let candidate = resource_dir
             .join("backend")
@@ -173,25 +200,20 @@ fn resolve_backend_path(app: &AppHandle) -> Result<PathBuf, String> {
             return Ok(candidate);
         }
     }
-    Err("Error: backend/bin/carta_backend binary not found".to_string())
+    Err("backend/bin/carta_backend binary not found".into())
 }
 
-fn resolve_casa_path(backend_path: &Path) -> Result<String, String> {
+fn resolve_casa_path(backend_path: &Path) -> AppResult<String> {
     let etc_path = resolve_etc_path(backend_path)?;
     Ok(format!("../../../../../{} linux", etc_path.display()))
 }
 
-fn resolve_etc_path(backend_path: &Path) -> Result<PathBuf, String> {
-    let etc_path = if let Some(bin_dir) = backend_path.parent() {
-        let candidate = bin_dir.join("..").join("etc");
-        if candidate.exists() {
-            candidate
-        } else {
-            return Err("Error: backend/etc directory not found".to_string());
-        }
-    } else {
-        return Err("Error: backend/etc directory not found".to_string());
-    };
+fn resolve_etc_path(backend_path: &Path) -> AppResult<PathBuf> {
+    let etc_path = backend_path
+        .parent()
+        .map(|bin| bin.join("..").join("etc"))
+        .filter(|p| p.exists())
+        .ok_or(AppError::from("backend/etc directory not found"))?;
 
     let resolved = fs::canonicalize(&etc_path).unwrap_or(etc_path);
 
@@ -207,11 +229,7 @@ fn resolve_etc_path(backend_path: &Path) -> Result<PathBuf, String> {
 
     if let Ok(metadata) = fs::symlink_metadata(&link_path) {
         if !metadata.file_type().is_symlink() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "symlink path already exists",
-            )
-            .to_string());
+            return Err("symlink path already exists".into());
         }
 
         if let Ok(existing) = fs::read_link(&link_path) {
@@ -234,26 +252,21 @@ fn path_has_space(path: &Path) -> bool {
     path.to_string_lossy().contains(' ')
 }
 
-fn resolve_frontend_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn resolve_frontend_path(app: &AppHandle) -> AppResult<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let candidate = resource_dir.join("frontend");
         if candidate.exists() {
             return Ok(candidate);
         }
     }
-    Err("Error: frontend directory not found".to_string())
+    Err("frontend directory not found".into())
 }
 
-fn run_backend_help(app: &AppHandle, version: bool) -> Result<(), String> {
+fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
     let backend_path = resolve_backend_path(app)?;
-    let mut cmd = Command::new(backend_path);
-    if version {
-        cmd.arg("--version");
-    } else {
-        cmd.arg("--help");
-    }
+    let flag = if version { "--version" } else { "--help" };
 
-    let output = cmd.output().map_err(|err| err.to_string())?;
+    let output = Command::new(backend_path).arg(flag).output()?;
     print!("{}", String::from_utf8_lossy(&output.stdout));
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
 
@@ -270,11 +283,9 @@ fn spawn_backend(
     state: &AppState,
     base_dir: &Path,
     extra_args: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let backend_path =
-        resolve_backend_path(app).map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
-    let frontend_path =
-        resolve_frontend_path(app).map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
+) -> AppResult<()> {
+    let backend_path = resolve_backend_path(app)?;
+    let frontend_path = resolve_frontend_path(app)?;
 
     let mut cmd = Command::new(&backend_path);
     cmd.arg(base_dir)
@@ -286,11 +297,10 @@ fn spawn_backend(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let casa_path = resolve_casa_path(&backend_path)
-        .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
+    let casa_path = resolve_casa_path(&backend_path)?;
     cmd.env("CASAPATH", casa_path);
 
-    let mut child = cmd.spawn()?;
+    let mut child = cmd.spawn().map_err(AppError::from)?;
 
     if let Some(stdout) = child.stdout.take() {
         pipe_output(stdout, false);
@@ -303,7 +313,7 @@ fn spawn_backend(
     Ok(())
 }
 
-fn wait_for_backend(port: u16, timeout: Duration) -> io::Result<()> {
+fn wait_for_backend(port: u16, timeout: Duration) -> AppResult<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let start = Instant::now();
     let mut last_error: Option<io::Error> = None;
@@ -319,15 +329,12 @@ fn wait_for_backend(port: u16, timeout: Duration) -> io::Result<()> {
     let detail = last_error
         .map(|err| format!(" ({})", err))
         .unwrap_or_default();
-    Err(io::Error::new(
-        io::ErrorKind::TimedOut,
-        format!(
-            "Error: Backend not ready on port {} after {}s{}",
-            port,
-            timeout.as_secs(),
-            detail
-        ),
-    ))
+    Err(AppError(format!(
+        "Backend not ready on port {} after {}s{}",
+        port,
+        timeout.as_secs(),
+        detail
+    )))
 }
 
 fn pipe_output<T: std::io::Read + Send + 'static>(reader: T, is_stderr: bool) {
