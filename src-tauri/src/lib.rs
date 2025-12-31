@@ -443,6 +443,9 @@ fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
     Ok(())
 }
 
+/// Spawns a thread to pipe backend output to stdout/stderr.
+/// The thread exits naturally when the pipe closes. JoinHandle is intentionally
+/// discarded as waiting for it adds complexity with minimal benefit.
 fn pipe_output<T: std::io::Read + Send + 'static>(reader: T, is_stderr: bool) {
     std::thread::spawn(move || {
         let buf = BufReader::new(reader);
@@ -538,6 +541,8 @@ exec "$backend" "$base" --port={port} --frontend_folder="$frontend" --no_browser
 
         *state.backend.lock().unwrap() = Some(child);
         // Replace any previous launcher script path and clean it up.
+        // Safe to delete script: bash reads the entire script before execution,
+        // and the previous backend (if any) no longer needs its script file.
         let mut script_guard = state.launcher_script.lock().unwrap();
         if let Some(prev) = script_guard.replace(script_file) {
             let _ = fs::remove_file(prev);
