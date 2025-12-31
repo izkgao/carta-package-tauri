@@ -174,7 +174,6 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-
 fn resolve_backend_path(app: &AppHandle) -> AppResult<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let candidate = resource_dir
@@ -219,9 +218,10 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
         // Check if symlink already exists and points to correct target
         let mut check_cmd = Command::new("wsl.exe");
         add_wsl_distro(&mut check_cmd);
-        check_cmd.args(["--", "readlink", "-f", &link_path])
+        check_cmd
+            .args(["--", "readlink", "-f", &link_path])
             .creation_flags(CREATE_NO_WINDOW);
-        
+
         if let Ok(output) = check_cmd.output() {
             let existing = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if existing == wsl_path {
@@ -232,17 +232,19 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
         // Check if something exists at link path
         let mut stat_cmd = Command::new("wsl.exe");
         add_wsl_distro(&mut stat_cmd);
-        stat_cmd.args(["--", "test", "-e", &link_path])
+        stat_cmd
+            .args(["--", "test", "-e", &link_path])
             .creation_flags(CREATE_NO_WINDOW);
-        
+
         let exists = stat_cmd.status().map(|s| s.success()).unwrap_or(false);
 
         // Check if it's a symlink
         let mut is_link_cmd = Command::new("wsl.exe");
         add_wsl_distro(&mut is_link_cmd);
-        is_link_cmd.args(["--", "test", "-L", &link_path])
+        is_link_cmd
+            .args(["--", "test", "-L", &link_path])
             .creation_flags(CREATE_NO_WINDOW);
-        
+
         let is_symlink = is_link_cmd.status().map(|s| s.success()).unwrap_or(false);
 
         if exists && !is_symlink {
@@ -253,7 +255,8 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
         if is_symlink {
             let mut rm_cmd = Command::new("wsl.exe");
             add_wsl_distro(&mut rm_cmd);
-            rm_cmd.args(["--", "rm", "-f", &link_path])
+            rm_cmd
+                .args(["--", "rm", "-f", &link_path])
                 .creation_flags(CREATE_NO_WINDOW);
             let _ = rm_cmd.status();
         }
@@ -261,9 +264,10 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
         // Create new symlink
         let mut ln_cmd = Command::new("wsl.exe");
         add_wsl_distro(&mut ln_cmd);
-        ln_cmd.args(["--", "ln", "-s", &wsl_path, &link_path])
+        ln_cmd
+            .args(["--", "ln", "-s", &wsl_path, &link_path])
             .creation_flags(CREATE_NO_WINDOW);
-        
+
         if ln_cmd.status().map(|s| s.success()).unwrap_or(false) {
             return Ok(link_path);
         } else {
@@ -271,10 +275,10 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         // If the etc path itself does not contain spaces, use the real path directly
-        if !path_has_space(&resolved) {
+        if !resolved.to_string_lossy().contains(' ') {
             return Ok(resolved.to_string_lossy().into_owned());
         }
 
@@ -304,11 +308,6 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
 
         return Ok(resolved.to_string_lossy().into_owned());
     }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn path_has_space(path: &Path) -> bool {
-    path.to_string_lossy().contains(' ')
 }
 
 fn resolve_frontend_path(app: &AppHandle) -> AppResult<PathBuf> {
@@ -461,12 +460,14 @@ fn spawn_backend_wsl(
     let base = win_to_wsl_path(&base_dir.to_string_lossy())
         .ok_or_else(|| AppError::from("Failed to convert base path to WSL format"))?;
     let casa_path = resolve_casa_path(&backend_path)?;
-    
+
     // Libs directory for LD_LIBRARY_PATH
-    let libs_path = backend_path.parent()
+    let libs_path = backend_path
+        .parent()
         .map(|bin| bin.join("..").join("libs"))
         .filter(|p| p.exists());
-    let libs = libs_path.as_ref()
+    let libs = libs_path
+        .as_ref()
         .and_then(|p| win_to_wsl_path(&p.to_string_lossy()))
         .unwrap_or_default();
     let extra = extra_args
@@ -557,18 +558,12 @@ fn wsl_bash_command(command: &str) -> Command {
 
 #[cfg(target_os = "windows")]
 fn wsl_bash_output(command: &str) -> AppResult<std::process::Output> {
-    let output = wsl_bash_command(command).output().map_err(|err| {
-        AppError(format!(
-            "Failed to run wsl.exe bash command: {}",
-            err
-        ))
-    })?;
+    let output = wsl_bash_command(command)
+        .output()
+        .map_err(|err| AppError(format!("Failed to run wsl.exe bash command: {}", err)))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError(format!(
-            "WSL command failed: {}",
-            detail.trim()
-        )));
+        return Err(AppError(format!("WSL command failed: {}", detail.trim())));
     }
     Ok(output)
 }
