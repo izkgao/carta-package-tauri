@@ -326,13 +326,13 @@ fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
     {
         return run_backend_help_wsl(app, version);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         return run_backend_help_native(app, version);
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn run_backend_help_native(app: &AppHandle, version: bool) -> AppResult<()> {
     let backend_path = resolve_backend_path(app)?;
     let flag = if version { "--version" } else { "--help" };
@@ -359,13 +359,13 @@ fn spawn_backend(
     {
         return spawn_backend_wsl(app, state, base_dir, extra_args);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         return spawn_backend_native(app, state, base_dir, extra_args);
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn spawn_backend_native(
     app: &AppHandle,
     state: &AppState,
