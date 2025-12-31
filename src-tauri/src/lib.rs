@@ -576,12 +576,23 @@ exec "$backend" "$base" --port={port} --frontend_folder="$frontend" --no_browser
     }
 }
 
-fn wait_for_backend(port: u16, timeout: Duration) -> AppResult<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+fn wait_for_backend(state: &AppState, timeout: Duration) -> AppResult<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], state.backend_port));
     let start = Instant::now();
     let mut last_error: Option<io::Error> = None;
 
     while start.elapsed() < timeout {
+        // Check if backend process is still running.
+        // On Windows, this checks wsl.exe which exits when the inner carta_backend exits.
+        if let Some(ref mut child) = *state.backend.lock().unwrap() {
+            if let Ok(Some(status)) = child.try_wait() {
+                return Err(AppError(format!(
+                    "Backend process exited unexpectedly with status: {}",
+                    status
+                )));
+            }
+        }
+
         match TcpStream::connect_timeout(&addr, Duration::from_millis(CONNECT_TIMEOUT_MS)) {
             Ok(_) => return Ok(()),
             Err(err) => last_error = Some(err),
@@ -594,7 +605,7 @@ fn wait_for_backend(port: u16, timeout: Duration) -> AppResult<()> {
         .unwrap_or_default();
     Err(AppError(format!(
         "Backend not ready on port {} after {}s{}",
-        port,
+        state.backend_port,
         timeout.as_secs(),
         detail
     )))
@@ -807,10 +818,7 @@ pub fn run() {
 
             let state = app.state::<AppState>();
             spawn_backend(app.handle(), &state, &base_dir, &extra_args)?;
-            if let Err(err) = wait_for_backend(
-                state.backend_port,
-                Duration::from_secs(BACKEND_TIMEOUT_SECS),
-            ) {
+            if let Err(err) = wait_for_backend(&state, Duration::from_secs(BACKEND_TIMEOUT_SECS)) {
                 shutdown_backend(&state);
                 return Err(err.into());
             }
