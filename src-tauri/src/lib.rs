@@ -121,6 +121,16 @@ fn parse_cli_args() -> CliArgs {
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--" => {
+                for rest in iter {
+                    if result.input_path.is_none() {
+                        result.input_path = Some(rest.clone());
+                    } else {
+                        result.extra_args.push(rest.clone());
+                    }
+                }
+                break;
+            }
             "--inspect" => result.inspect = true,
             "--help" | "-h" => result.help = true,
             "--version" | "-v" => result.version = true,
