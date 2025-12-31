@@ -9,6 +9,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, Runtime, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, Window, WindowEvent,
@@ -29,6 +34,9 @@ const SYMLINK_NAME: &str = "carta-etc";
 
 const ENV_AUTH_TOKEN: &str = "CARTA_AUTH_TOKEN";
 const ENV_CASAPATH: &str = "CASAPATH";
+const BACKEND_FILENAME: &str = "carta_backend";
+#[cfg(target_os = "windows")]
+const ENV_WSL_DISTRO: &str = "CARTA_WSL_DISTRO";
 
 const BACKEND_TIMEOUT_SECS: u64 = 20;
 const CONNECT_TIMEOUT_MS: u64 = 250;
@@ -166,29 +174,27 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn backend_filename() -> String {
-    format!("carta_backend{}", std::env::consts::EXE_SUFFIX)
-}
 
 fn resolve_backend_path(app: &AppHandle) -> AppResult<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let candidate = resource_dir
             .join(BACKEND_DIR)
             .join("bin")
-            .join(backend_filename());
+            .join(BACKEND_FILENAME);
         if candidate.exists() {
             return Ok(candidate);
         }
     }
+
     Err("backend/bin/carta_backend binary not found".into())
 }
 
 fn resolve_casa_path(backend_path: &Path) -> AppResult<String> {
     let etc_path = resolve_etc_path(backend_path)?;
-    Ok(format!("../../../../../{} linux", etc_path.display()))
+    Ok(format!("../../../../../{} linux", etc_path))
 }
 
-fn resolve_etc_path(backend_path: &Path) -> AppResult<PathBuf> {
+fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
     let etc_path = backend_path
         .parent()
         .map(|bin| bin.join("..").join("etc"))
@@ -197,38 +203,110 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<PathBuf> {
 
     let resolved = fs::canonicalize(&etc_path).unwrap_or(etc_path);
 
-    // If the etc path itself does not contain spaces, use the real path directly
-    if !path_has_space(&resolved) {
-        return Ok(resolved);
-    }
+    #[cfg(target_os = "windows")]
+    {
+        let wsl_path = win_to_wsl_path(&resolved.to_string_lossy())
+            .ok_or_else(|| AppError::from("Failed to convert etc path to WSL format"))?;
 
-    // If the etc path contains spaces, try to create a symlink in /tmp
-    let base_dir = PathBuf::from(SYMLINK_BASE);
-    let _ = fs::create_dir_all(&base_dir);
-    let link_path = base_dir.join(SYMLINK_NAME);
+        // If path doesn't contain spaces, use it directly
+        if !wsl_path.contains(' ') {
+            return Ok(wsl_path);
+        }
 
-    if let Ok(metadata) = fs::symlink_metadata(&link_path) {
-        if !metadata.file_type().is_symlink() {
+        // Path contains spaces, need to create symlink in WSL
+        let link_path = format!("{}/{}", SYMLINK_BASE, SYMLINK_NAME);
+
+        // Check if symlink already exists and points to correct target
+        let mut check_cmd = Command::new("wsl.exe");
+        add_wsl_distro(&mut check_cmd);
+        check_cmd.args(["--", "readlink", "-f", &link_path])
+            .creation_flags(CREATE_NO_WINDOW);
+        
+        if let Ok(output) = check_cmd.output() {
+            let existing = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if existing == wsl_path {
+                return Ok(link_path);
+            }
+        }
+
+        // Check if something exists at link path
+        let mut stat_cmd = Command::new("wsl.exe");
+        add_wsl_distro(&mut stat_cmd);
+        stat_cmd.args(["--", "test", "-e", &link_path])
+            .creation_flags(CREATE_NO_WINDOW);
+        
+        let exists = stat_cmd.status().map(|s| s.success()).unwrap_or(false);
+
+        // Check if it's a symlink
+        let mut is_link_cmd = Command::new("wsl.exe");
+        add_wsl_distro(&mut is_link_cmd);
+        is_link_cmd.args(["--", "test", "-L", &link_path])
+            .creation_flags(CREATE_NO_WINDOW);
+        
+        let is_symlink = is_link_cmd.status().map(|s| s.success()).unwrap_or(false);
+
+        if exists && !is_symlink {
             return Err("symlink path already exists".into());
         }
 
-        if let Ok(existing) = fs::read_link(&link_path)
-            && existing == resolved
-        {
-            return Ok(link_path);
+        // Remove existing symlink if it points to wrong target
+        if is_symlink {
+            let mut rm_cmd = Command::new("wsl.exe");
+            add_wsl_distro(&mut rm_cmd);
+            rm_cmd.args(["--", "rm", "-f", &link_path])
+                .creation_flags(CREATE_NO_WINDOW);
+            let _ = rm_cmd.status();
         }
 
-        let _ = fs::remove_file(&link_path);
+        // Create new symlink
+        let mut ln_cmd = Command::new("wsl.exe");
+        add_wsl_distro(&mut ln_cmd);
+        ln_cmd.args(["--", "ln", "-s", &wsl_path, &link_path])
+            .creation_flags(CREATE_NO_WINDOW);
+        
+        if ln_cmd.status().map(|s| s.success()).unwrap_or(false) {
+            return Ok(link_path);
+        } else {
+            return Ok(wsl_path);
+        }
     }
 
-    #[cfg(unix)]
-    if std::os::unix::fs::symlink(&resolved, &link_path).is_ok() {
-        return Ok(link_path);
-    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // If the etc path itself does not contain spaces, use the real path directly
+        if !path_has_space(&resolved) {
+            return Ok(resolved.to_string_lossy().into_owned());
+        }
 
-    Ok(resolved)
+        // If the etc path contains spaces, try to create a symlink in /tmp
+        let base_dir = PathBuf::from(SYMLINK_BASE);
+        let _ = fs::create_dir_all(&base_dir);
+        let link_path = base_dir.join(SYMLINK_NAME);
+
+        if let Ok(metadata) = fs::symlink_metadata(&link_path) {
+            if !metadata.file_type().is_symlink() {
+                return Err("symlink path already exists".into());
+            }
+
+            if let Ok(existing) = fs::read_link(&link_path)
+                && existing == resolved
+            {
+                return Ok(link_path.to_string_lossy().into_owned());
+            }
+
+            let _ = fs::remove_file(&link_path);
+        }
+
+        #[cfg(unix)]
+        if std::os::unix::fs::symlink(&resolved, &link_path).is_ok() {
+            return Ok(link_path.to_string_lossy().into_owned());
+        }
+
+        return Ok(resolved.to_string_lossy().into_owned());
+    }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn path_has_space(path: &Path) -> bool {
     path.to_string_lossy().contains(' ')
 }
@@ -240,10 +318,23 @@ fn resolve_frontend_path(app: &AppHandle) -> AppResult<PathBuf> {
             return Ok(candidate);
         }
     }
+
     Err("frontend directory not found".into())
 }
 
 fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        return run_backend_help_wsl(app, version);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        return run_backend_help_native(app, version);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_backend_help_native(app: &AppHandle, version: bool) -> AppResult<()> {
     let backend_path = resolve_backend_path(app)?;
     let flag = if version { "--version" } else { "--help" };
 
@@ -260,6 +351,23 @@ fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
 }
 
 fn spawn_backend(
+    app: &AppHandle,
+    state: &AppState,
+    base_dir: &Path,
+    extra_args: &[String],
+) -> AppResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        return spawn_backend_wsl(app, state, base_dir, extra_args);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        return spawn_backend_native(app, state, base_dir, extra_args);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn spawn_backend_native(
     app: &AppHandle,
     state: &AppState,
     base_dir: &Path,
@@ -292,6 +400,195 @@ fn spawn_backend(
 
     *state.backend.lock().unwrap() = Some(child);
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn run_backend_help_wsl(app: &AppHandle, version: bool) -> AppResult<()> {
+    let backend_path = resolve_backend_path(app)?;
+    let flag = if version { "--version" } else { "--help" };
+
+    let backend_win = backend_path.to_string_lossy();
+    let script = format!(
+        "set -e\nbackend_win={}\nbackend=$(wslpath -a -u \"$backend_win\")\nexec \"$backend\" {}\n",
+        bash_escape(&backend_win),
+        bash_escape(flag)
+    );
+    let output = wsl_bash_output(&script)?;
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+
+    if !version {
+        println!("Additional Tauri flag:");
+        println!("      --inspect      Open the DevTools in the Tauri window.");
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn win_to_wsl_path(win_path: &str) -> Option<String> {
+    // Convert C:\path\to\file to /mnt/c/path/to/file
+    // Also strips Windows extended-length path prefix (\\?\) for WSL compatibility
+    let path = win_path.trim();
+    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
+    if path.len() < 2 {
+        return None;
+    }
+    let chars: Vec<char> = path.chars().collect();
+    if chars.get(1) != Some(&':') {
+        return None;
+    }
+    let drive = chars[0].to_ascii_lowercase();
+    let rest = &path[2..].replace('\\', "/");
+    Some(format!("/mnt/{}{}", drive, rest))
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_backend_wsl(
+    app: &AppHandle,
+    state: &AppState,
+    base_dir: &Path,
+    extra_args: &[String],
+) -> AppResult<()> {
+    let backend_path = resolve_backend_path(app)?;
+    let frontend_path = resolve_frontend_path(app)?;
+
+    // Convert Windows paths to WSL paths directly in Rust
+    let backend = win_to_wsl_path(&backend_path.to_string_lossy())
+        .ok_or_else(|| AppError::from("Failed to convert backend path to WSL format"))?;
+    let frontend = win_to_wsl_path(&frontend_path.to_string_lossy())
+        .ok_or_else(|| AppError::from("Failed to convert frontend path to WSL format"))?;
+    let base = win_to_wsl_path(&base_dir.to_string_lossy())
+        .ok_or_else(|| AppError::from("Failed to convert base path to WSL format"))?;
+    let casa_path = resolve_casa_path(&backend_path)?;
+    
+    // Libs directory for LD_LIBRARY_PATH
+    let libs_path = backend_path.parent()
+        .map(|bin| bin.join("..").join("libs"))
+        .filter(|p| p.exists());
+    let libs = libs_path.as_ref()
+        .and_then(|p| win_to_wsl_path(&p.to_string_lossy()))
+        .unwrap_or_default();
+    let extra = extra_args
+        .iter()
+        .map(|arg| bash_escape(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Write script to temp file to avoid PowerShell escaping issues
+    let script = format!(
+        r#"#!/bin/bash
+set -e
+backend="{}"
+frontend="{}"
+base="{}"
+auth_token="{}"
+libs_path="{}"
+export LD_LIBRARY_PATH="$libs_path:$LD_LIBRARY_PATH"
+export {}="$auth_token"
+export {}="{}"
+exec "$backend" "$base" --port={} --frontend_folder="$frontend" --no_browser {}
+"#,
+        backend,
+        frontend,
+        base,
+        state.backend_token,
+        libs,
+        ENV_AUTH_TOKEN,
+        ENV_CASAPATH,
+        casa_path,
+        state.backend_port,
+        extra
+    );
+
+    // Write script to temp file
+    let temp_dir = std::env::temp_dir();
+    let script_file = temp_dir.join("carta_launcher.sh");
+    fs::write(&script_file, &script)
+        .map_err(|e| AppError(format!("Failed to write script: {}", e)))?;
+    let script_wsl = win_to_wsl_path(&script_file.to_string_lossy())
+        .ok_or_else(|| AppError::from("Failed to convert script path"))?;
+
+    let mut cmd = Command::new("wsl.exe");
+    add_wsl_distro(&mut cmd);
+    cmd.arg("--")
+        .arg("bash")
+        .arg("-l")
+        .arg(&script_wsl)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = cmd.spawn().map_err(AppError::from)?;
+
+    if let Some(stdout) = child.stdout.take() {
+        pipe_output(stdout, false);
+    }
+    if let Some(stderr) = child.stderr.take() {
+        pipe_output(stderr, true);
+    }
+
+    *state.backend.lock().unwrap() = Some(child);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_distro() -> Option<String> {
+    std::env::var(ENV_WSL_DISTRO)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "windows")]
+fn add_wsl_distro(cmd: &mut Command) {
+    if let Some(distro) = wsl_distro() {
+        cmd.arg("-d").arg(distro);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_bash_command(command: &str) -> Command {
+    let mut cmd = Command::new("wsl.exe");
+    add_wsl_distro(&mut cmd);
+    cmd.arg("--").arg("bash").arg("-lc").arg(command);
+    cmd
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_bash_output(command: &str) -> AppResult<std::process::Output> {
+    let output = wsl_bash_command(command).output().map_err(|err| {
+        AppError(format!(
+            "Failed to run wsl.exe bash command: {}",
+            err
+        ))
+    })?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError(format!(
+            "WSL command failed: {}",
+            detail.trim()
+        )));
+    }
+    Ok(output)
+}
+
+#[cfg(target_os = "windows")]
+fn bash_escape(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+
+    let mut escaped = String::from("'");
+    for ch in value.chars() {
+        if ch == '\'' {
+            escaped.push_str("'\"'\"'");
+        } else {
+            escaped.push(ch);
+        }
+    }
+    escaped.push('\'');
+    escaped
 }
 
 fn wait_for_backend(port: u16, timeout: Duration) -> AppResult<()> {
@@ -397,13 +694,17 @@ fn new_window_label() -> String {
 fn create_window(app: &AppHandle, state: &AppState, label: String) -> tauri::Result<WebviewWindow> {
     let bounds = next_window_bounds(app);
     let url = WebviewUrl::App(state.window_url.clone().into());
+    let menu = build_menu(app)?;
     let window = WebviewWindowBuilder::new(app, label, url)
         .title(WINDOW_TITLE)
+        .menu(menu)
         .inner_size(bounds.width as f64, bounds.height as f64)
         .position(bounds.x as f64, bounds.y as f64)
         .build()?;
 
-    maybe_open_devtools(&window, state.inspect);
+    if state.inspect {
+        window.open_devtools();
+    }
     Ok(window)
 }
 
@@ -419,38 +720,35 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         .select_all()
         .build()?;
 
-    let mut menu = MenuBuilder::new(app);
+    let new_window = MenuItem::with_id(
+        app,
+        MENU_NEW_WINDOW,
+        "New CARTA Window",
+        true,
+        Some("CmdOrCtrl+N"),
+    )?;
+    let toggle_devtools = MenuItem::with_id(
+        app,
+        MENU_TOGGLE_DEVTOOLS,
+        "Toggle DevTools",
+        true,
+        Some("Alt+CmdOrCtrl+I"),
+    )?;
 
-    if cfg!(target_os = "macos") {
-        let new_window = MenuItem::with_id(
-            app,
-            MENU_NEW_WINDOW,
-            "New CARTA Window",
-            true,
-            Some("CmdOrCtrl+N"),
-        )?;
-        let toggle_devtools = MenuItem::with_id(
-            app,
-            MENU_TOGGLE_DEVTOOLS,
-            "Toggle DevTools",
-            true,
-            Some("Alt+CmdOrCtrl+I"),
-        )?;
+    let app_menu = SubmenuBuilder::new(app, &app.package_info().name)
+        .item(&new_window)
+        .separator()
+        .fullscreen()
+        .separator()
+        .item(&toggle_devtools)
+        .separator()
+        .quit()
+        .build()?;
 
-        let app_menu = SubmenuBuilder::new(app, &app.package_info().name)
-            .item(&new_window)
-            .separator()
-            .fullscreen()
-            .separator()
-            .item(&toggle_devtools)
-            .separator()
-            .quit()
-            .build()?;
-
-        menu = menu.item(&app_menu);
-    }
-
-    menu.item(&edit_menu).build()
+    MenuBuilder::new(app)
+        .item(&app_menu)
+        .item(&edit_menu)
+        .build()
 }
 
 fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::MenuEvent) {
@@ -471,12 +769,6 @@ fn shutdown_backend(state: &AppState) {
     if let Some(mut child) = state.backend.lock().unwrap().take() {
         let _ = child.kill();
         let _ = child.wait();
-    }
-}
-
-fn maybe_open_devtools(window: &WebviewWindow, enabled: bool) {
-    if enabled {
-        window.open_devtools();
     }
 }
 
