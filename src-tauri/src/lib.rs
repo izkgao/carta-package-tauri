@@ -395,52 +395,42 @@ fn resolve_casa_path(backend_path: &Path) -> AppResult<String> {
 fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
     #[cfg(target_os = "windows")]
     {
-        return run_backend_help_wsl(app, version);
+        let backend_path = resolve_backend_path(app)?;
+        let flag = if version { "--version" } else { "--help" };
+
+        let backend_win = backend_path.to_string_lossy();
+        let script = format!(
+            "set -e\nbackend_win={}\nbackend=$(wslpath -a -u \"$backend_win\")\nexec \"$backend\" {}\n",
+            bash_escape(&backend_win),
+            bash_escape(flag)
+        );
+        let output = wsl_bash_output(&script)?;
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+
+        if !version {
+            println!("Additional Tauri flag:");
+            println!("      --inspect      Open the DevTools in the Tauri window.");
+        }
+
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     {
-        return run_backend_help_native(app, version);
+        let backend_path = resolve_backend_path(app)?;
+        let flag = if version { "--version" } else { "--help" };
+
+        let output = Command::new(backend_path).arg(flag).output()?;
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+
+        if !version {
+            println!("Additional Tauri flag:");
+            println!("      --inspect      Open the DevTools in the Tauri window.");
+        }
+
+        Ok(())
     }
-}
-
-#[cfg(target_os = "macos")]
-fn run_backend_help_native(app: &AppHandle, version: bool) -> AppResult<()> {
-    let backend_path = resolve_backend_path(app)?;
-    let flag = if version { "--version" } else { "--help" };
-
-    let output = Command::new(backend_path).arg(flag).output()?;
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-
-    if !version {
-        println!("Additional Tauri flag:");
-        println!("      --inspect      Open the DevTools in the Tauri window.");
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn run_backend_help_wsl(app: &AppHandle, version: bool) -> AppResult<()> {
-    let backend_path = resolve_backend_path(app)?;
-    let flag = if version { "--version" } else { "--help" };
-
-    let backend_win = backend_path.to_string_lossy();
-    let script = format!(
-        "set -e\nbackend_win={}\nbackend=$(wslpath -a -u \"$backend_win\")\nexec \"$backend\" {}\n",
-        bash_escape(&backend_win),
-        bash_escape(flag)
-    );
-    let output = wsl_bash_output(&script)?;
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-
-    if !version {
-        println!("Additional Tauri flag:");
-        println!("      --inspect      Open the DevTools in the Tauri window.");
-    }
-
-    Ok(())
 }
 
 fn pipe_output<T: std::io::Read + Send + 'static>(reader: T, is_stderr: bool) {
@@ -464,87 +454,36 @@ fn spawn_backend(
 ) -> AppResult<()> {
     #[cfg(target_os = "windows")]
     {
-        return spawn_backend_wsl(app, state, base_dir, extra_args);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        return spawn_backend_native(app, state, base_dir, extra_args);
-    }
-}
+        let backend_path = resolve_backend_path(app)?;
+        let frontend_path = resolve_frontend_path(app)?;
 
-#[cfg(target_os = "macos")]
-fn spawn_backend_native(
-    app: &AppHandle,
-    state: &AppState,
-    base_dir: &Path,
-    extra_args: &[String],
-) -> AppResult<()> {
-    let backend_path = resolve_backend_path(app)?;
-    let frontend_path = resolve_frontend_path(app)?;
+        // Convert Windows paths to WSL paths directly in Rust
+        let backend = win_to_wsl_path(&backend_path.to_string_lossy())
+            .ok_or_else(|| AppError::from("Failed to convert backend path to WSL format"))?;
+        let frontend = win_to_wsl_path(&frontend_path.to_string_lossy())
+            .ok_or_else(|| AppError::from("Failed to convert frontend path to WSL format"))?;
+        let base = win_to_wsl_path(&base_dir.to_string_lossy())
+            .ok_or_else(|| AppError::from("Failed to convert base path to WSL format"))?;
+        let casa_path = resolve_casa_path(&backend_path)?;
 
-    let mut cmd = Command::new(&backend_path);
-    cmd.arg(base_dir)
-        .arg(format!("--port={}", state.backend_port))
-        .arg(format!("--frontend_folder={}", frontend_path.display()))
-        .arg("--no_browser")
-        .args(extra_args)
-        .env(ENV_AUTH_TOKEN, &state.backend_token)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        // Libs directory for LD_LIBRARY_PATH
+        let libs_path = backend_path
+            .parent()
+            .map(|bin| bin.join("..").join("libs"))
+            .filter(|p| p.exists());
+        let libs = libs_path
+            .as_ref()
+            .and_then(|p| win_to_wsl_path(&p.to_string_lossy()))
+            .unwrap_or_default();
+        let extra = extra_args
+            .iter()
+            .map(|arg| bash_escape(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
 
-    let casa_path = resolve_casa_path(&backend_path)?;
-    cmd.env(ENV_CASAPATH, casa_path);
-
-    let mut child = cmd.spawn().map_err(AppError::from)?;
-
-    if let Some(stdout) = child.stdout.take() {
-        pipe_output(stdout, false);
-    }
-    if let Some(stderr) = child.stderr.take() {
-        pipe_output(stderr, true);
-    }
-
-    *state.backend.lock().unwrap() = Some(child);
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn spawn_backend_wsl(
-    app: &AppHandle,
-    state: &AppState,
-    base_dir: &Path,
-    extra_args: &[String],
-) -> AppResult<()> {
-    let backend_path = resolve_backend_path(app)?;
-    let frontend_path = resolve_frontend_path(app)?;
-
-    // Convert Windows paths to WSL paths directly in Rust
-    let backend = win_to_wsl_path(&backend_path.to_string_lossy())
-        .ok_or_else(|| AppError::from("Failed to convert backend path to WSL format"))?;
-    let frontend = win_to_wsl_path(&frontend_path.to_string_lossy())
-        .ok_or_else(|| AppError::from("Failed to convert frontend path to WSL format"))?;
-    let base = win_to_wsl_path(&base_dir.to_string_lossy())
-        .ok_or_else(|| AppError::from("Failed to convert base path to WSL format"))?;
-    let casa_path = resolve_casa_path(&backend_path)?;
-
-    // Libs directory for LD_LIBRARY_PATH
-    let libs_path = backend_path
-        .parent()
-        .map(|bin| bin.join("..").join("libs"))
-        .filter(|p| p.exists());
-    let libs = libs_path
-        .as_ref()
-        .and_then(|p| win_to_wsl_path(&p.to_string_lossy()))
-        .unwrap_or_default();
-    let extra = extra_args
-        .iter()
-        .map(|arg| bash_escape(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    // Write script to temp file to avoid PowerShell escaping issues
-    let script = format!(
-        r#"#!/bin/bash
+        // Write script to temp file to avoid PowerShell escaping issues
+        let script = format!(
+            r#"#!/bin/bash
 set -e
 backend="{}"
 frontend="{}"
@@ -556,47 +495,78 @@ export {}="$auth_token"
 export {}="{}"
 exec "$backend" "$base" --port={} --frontend_folder="$frontend" --no_browser {}
 "#,
-        backend,
-        frontend,
-        base,
-        state.backend_token,
-        libs,
-        ENV_AUTH_TOKEN,
-        ENV_CASAPATH,
-        casa_path,
-        state.backend_port,
-        extra
-    );
+            backend,
+            frontend,
+            base,
+            state.backend_token,
+            libs,
+            ENV_AUTH_TOKEN,
+            ENV_CASAPATH,
+            casa_path,
+            state.backend_port,
+            extra
+        );
 
-    // Write script to temp file
-    let temp_dir = std::env::temp_dir();
-    let script_file = temp_dir.join("carta_launcher.sh");
-    fs::write(&script_file, &script)
-        .map_err(|e| AppError(format!("Failed to write script: {}", e)))?;
-    let script_wsl = win_to_wsl_path(&script_file.to_string_lossy())
-        .ok_or_else(|| AppError::from("Failed to convert script path"))?;
+        // Write script to temp file
+        let temp_dir = std::env::temp_dir();
+        let script_file = temp_dir.join("carta_launcher.sh");
+        fs::write(&script_file, &script)
+            .map_err(|e| AppError(format!("Failed to write script: {}", e)))?;
+        let script_wsl = win_to_wsl_path(&script_file.to_string_lossy())
+            .ok_or_else(|| AppError::from("Failed to convert script path"))?;
 
-    let mut cmd = Command::new("wsl.exe");
-    add_wsl_distro(&mut cmd);
-    cmd.arg("--")
-        .arg("bash")
-        .arg("-l")
-        .arg(&script_wsl)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW);
+        let mut cmd = Command::new("wsl.exe");
+        add_wsl_distro(&mut cmd);
+        cmd.arg("--")
+            .arg("bash")
+            .arg("-l")
+            .arg(&script_wsl)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW);
 
-    let mut child = cmd.spawn().map_err(AppError::from)?;
+        let mut child = cmd.spawn().map_err(AppError::from)?;
 
-    if let Some(stdout) = child.stdout.take() {
-        pipe_output(stdout, false);
+        if let Some(stdout) = child.stdout.take() {
+            pipe_output(stdout, false);
+        }
+        if let Some(stderr) = child.stderr.take() {
+            pipe_output(stderr, true);
+        }
+
+        *state.backend.lock().unwrap() = Some(child);
+        return Ok(());
     }
-    if let Some(stderr) = child.stderr.take() {
-        pipe_output(stderr, true);
-    }
+    #[cfg(target_os = "macos")]
+    {
+        let backend_path = resolve_backend_path(app)?;
+        let frontend_path = resolve_frontend_path(app)?;
 
-    *state.backend.lock().unwrap() = Some(child);
-    Ok(())
+        let mut cmd = Command::new(&backend_path);
+        cmd.arg(base_dir)
+            .arg(format!("--port={}", state.backend_port))
+            .arg(format!("--frontend_folder={}", frontend_path.display()))
+            .arg("--no_browser")
+            .args(extra_args)
+            .env(ENV_AUTH_TOKEN, &state.backend_token)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let casa_path = resolve_casa_path(&backend_path)?;
+        cmd.env(ENV_CASAPATH, casa_path);
+
+        let mut child = cmd.spawn().map_err(AppError::from)?;
+
+        if let Some(stdout) = child.stdout.take() {
+            pipe_output(stdout, false);
+        }
+        if let Some(stderr) = child.stderr.take() {
+            pipe_output(stderr, true);
+        }
+
+        *state.backend.lock().unwrap() = Some(child);
+        return Ok(());
+    }
 }
 
 fn wait_for_backend(port: u16, timeout: Duration) -> AppResult<()> {
