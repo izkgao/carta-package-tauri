@@ -724,7 +724,10 @@ fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::Menu
             let _ = create_window(app, state, new_window_label());
         }
         MENU_TOGGLE_DEVTOOLS => {
-            if let Some(window) = focused_window(app) {
+            if let Some(window) = focused_window(app)
+                .or_else(|| app.webview_windows().values().next().cloned())
+            {
+                let _ = window.set_focus();
                 toggle_devtools(&window);
             }
         }
