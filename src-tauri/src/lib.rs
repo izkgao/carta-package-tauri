@@ -142,6 +142,7 @@ where
                     && let Some(next) = iter.peek()
                     && !next.starts_with('-')
                 {
+                    // Safe: peek() succeeded above, so next() will return Some
                     result.extra_args.push(iter.next().unwrap());
                 }
             }
