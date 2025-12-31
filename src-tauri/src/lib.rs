@@ -589,14 +589,13 @@ fn wait_for_backend(state: &AppState, timeout: Duration) -> AppResult<()> {
     while start.elapsed() < timeout {
         // Check if backend process is still running.
         // On Windows, this checks wsl.exe which exits when the inner carta_backend exits.
-        if let Some(ref mut child) = *state.backend.lock().unwrap() {
-            if let Ok(Some(status)) = child.try_wait() {
+        if let Some(ref mut child) = *state.backend.lock().unwrap()
+            && let Ok(Some(status)) = child.try_wait() {
                 return Err(AppError(format!(
                     "Backend process exited unexpectedly with status: {}",
                     status
                 )));
             }
-        }
 
         match TcpStream::connect_timeout(&addr, Duration::from_millis(CONNECT_TIMEOUT_MS)) {
             Ok(_) => return Ok(()),
