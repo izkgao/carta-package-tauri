@@ -110,8 +110,6 @@ struct AppState {
     backend_token: String,
     window_url: String,
     inspect: bool,
-    #[cfg(target_os = "windows")]
-    launcher_script: Mutex<Option<PathBuf>>,
 }
 
 fn parse_cli_args_from<I>(args: I) -> CliArgs
@@ -483,9 +481,7 @@ fn spawn_backend(
         let libs_path = backend_path
             .parent()
             .map(|bin| bin.join("..").join("libs"))
-            .filter(|p| p.exists());
-        let libs = libs_path
-            .as_ref()
+            .filter(|p| p.exists())
             .and_then(|p| win_to_wsl_path(&p.to_string_lossy()))
             .unwrap_or_default();
         let extra = extra_args
@@ -496,37 +492,19 @@ fn spawn_backend(
 
         let auth_token = &state.backend_token;
         let port = state.backend_port;
-        // Write script to temp file to avoid PowerShell escaping issues
-        let script = format!(
-            r#"#!/bin/bash
-set -e
-backend="{backend}"
-frontend="{frontend}"
-base="{base}"
-auth_token="{auth_token}"
-libs_path="{libs}"
-export LD_LIBRARY_PATH="$libs_path:$LD_LIBRARY_PATH"
-export {ENV_AUTH_TOKEN}="$auth_token"
-export {ENV_CASAPATH}="{casa_path}"
-exec "$backend" "$base" --port={port} --frontend_folder="$frontend" --no_browser {extra}
-"#
+        let backend_escaped = bash_escape(&backend);
+        let frontend_escaped = bash_escape(&frontend);
+        let base_escaped = bash_escape(&base);
+        let auth_token_escaped = bash_escape(auth_token);
+        let libs_escaped = bash_escape(&libs_path);
+        let casa_path_escaped = bash_escape(&casa_path);
+
+        let command = format!(
+            "export LD_LIBRARY_PATH={libs_escaped}:$LD_LIBRARY_PATH; export {ENV_AUTH_TOKEN}={auth_token_escaped}; export {ENV_CASAPATH}={casa_path_escaped}; exec {backend_escaped} {base_escaped} --port={port} --frontend_folder={frontend_escaped} --no_browser {extra}"
         );
 
-        // Write script to a unique temp file to avoid clobbering across launches
-        let temp_dir = std::env::temp_dir();
-        let script_file = temp_dir.join(format!("carta_launcher-{}.sh", uuid::Uuid::new_v4()));
-        fs::write(&script_file, &script)
-            .map_err(|e| AppError(format!("Failed to write script: {}", e)))?;
-        let script_wsl = win_to_wsl_path(&script_file.to_string_lossy())
-            .ok_or_else(|| AppError::from("Failed to convert script path"))?;
-
-        let mut cmd = Command::new("wsl.exe");
-        add_wsl_distro(&mut cmd);
-        cmd.arg("--")
-            .arg("bash")
-            .arg("-l")
-            .arg(&script_wsl)
-            .stdout(Stdio::piped())
+        let mut cmd = wsl_bash_command(&command);
+        cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .creation_flags(CREATE_NO_WINDOW);
 
@@ -540,13 +518,6 @@ exec "$backend" "$base" --port={port} --frontend_folder="$frontend" --no_browser
         }
 
         *state.backend.lock().unwrap() = Some(child);
-        // Replace any previous launcher script path and clean it up.
-        // Safe to delete script: bash reads the entire script before execution,
-        // and the previous backend (if any) no longer needs its script file.
-        let mut script_guard = state.launcher_script.lock().unwrap();
-        if let Some(prev) = script_guard.replace(script_file) {
-            let _ = fs::remove_file(prev);
-        }
         Ok(())
     }
     #[cfg(target_os = "macos")]
@@ -766,10 +737,6 @@ fn shutdown_backend(state: &AppState) {
         let _ = child.kill();
         let _ = child.wait();
     }
-    #[cfg(target_os = "windows")]
-    if let Some(script_path) = state.launcher_script.lock().unwrap().take() {
-        let _ = fs::remove_file(script_path);
-    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -799,8 +766,6 @@ pub fn run() {
         backend_token,
         window_url,
         inspect: cli.inspect,
-        #[cfg(target_os = "windows")]
-        launcher_script: Mutex::new(None),
     };
 
     let extra_args = cli.extra_args.clone();
