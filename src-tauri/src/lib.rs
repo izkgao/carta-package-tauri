@@ -114,10 +114,12 @@ struct AppState {
     launcher_script: Mutex<Option<PathBuf>>,
 }
 
-fn parse_cli_args() -> CliArgs {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+fn parse_cli_args_from<I>(args: I) -> CliArgs
+where
+    I: IntoIterator<Item = String>,
+{
     let mut result = CliArgs::default();
-    let mut iter = args.iter().peekable();
+    let mut iter = args.into_iter().peekable();
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -149,6 +151,10 @@ fn parse_cli_args() -> CliArgs {
     }
 
     result
+}
+
+fn parse_cli_args() -> CliArgs {
+    parse_cli_args_from(std::env::args().skip(1))
 }
 
 fn resolve_base_directory(input_path: Option<&str>) -> AppResult<PathBuf> {
@@ -836,4 +842,143 @@ pub fn run() {
             shutdown_backend(&state);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_args(args: &[&str]) -> CliArgs {
+        parse_cli_args_from(args.iter().map(|arg| (*arg).to_string()))
+    }
+
+    #[test]
+    fn parse_cli_args_respects_double_dash() {
+        let parsed = parse_args(&["--", "--inspect", "-weird"]);
+        assert_eq!(parsed.input_path.as_deref(), Some("--inspect"));
+        assert_eq!(parsed.extra_args, vec!["-weird"]);
+        assert!(!parsed.inspect);
+    }
+
+    #[test]
+    fn parse_cli_args_collects_unknown_flags_with_values() {
+        let parsed = parse_args(&["--foo", "bar", "file"]);
+        assert_eq!(parsed.input_path.as_deref(), Some("file"));
+        assert_eq!(parsed.extra_args, vec!["--foo", "bar"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_casa_path_uses_space_free_path() {
+        let base_dir = std::env::temp_dir().join(format!("carta test {}", uuid::Uuid::new_v4()));
+        let backend_dir = base_dir.join("backend");
+        let bin_dir = backend_dir.join("bin");
+        let etc_dir = backend_dir.join("etc");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::create_dir_all(&etc_dir).unwrap();
+        let backend_path = bin_dir.join(BACKEND_FILENAME);
+        fs::write(&backend_path, b"").unwrap();
+
+        let resolved = fs::canonicalize(&etc_dir).unwrap_or_else(|_| etc_dir.clone());
+        let link_path = PathBuf::from(SYMLINK_BASE).join(SYMLINK_NAME);
+        let mut cleanup_link = false;
+
+        match fs::symlink_metadata(&link_path) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_symlink() {
+                    let _ = fs::remove_dir_all(&base_dir);
+                    return;
+                }
+                let Ok(existing) = fs::read_link(&link_path) else {
+                    let _ = fs::remove_dir_all(&base_dir);
+                    return;
+                };
+                if existing != resolved {
+                    let _ = fs::remove_dir_all(&base_dir);
+                    return;
+                }
+            }
+            Err(_) => cleanup_link = true,
+        }
+
+        let casa_path = resolve_casa_path(&backend_path).unwrap();
+        let parts: Vec<_> = casa_path.split(' ').collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1], "linux");
+        assert!(parts[0].contains(SYMLINK_NAME));
+
+        if cleanup_link {
+            let _ = fs::remove_file(&link_path);
+        }
+        let _ = fs::remove_dir_all(&base_dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn resolve_casa_path_uses_space_free_path() {
+        assert!(
+            wsl_bash_output("true").is_ok(),
+            "WSL is required to run this test"
+        );
+
+        let base_dir = std::env::temp_dir().join(format!("carta test {}", uuid::Uuid::new_v4()));
+        let backend_dir = base_dir.join("backend");
+        let bin_dir = backend_dir.join("bin");
+        let etc_dir = backend_dir.join("etc");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::create_dir_all(&etc_dir).unwrap();
+        let backend_path = bin_dir.join(BACKEND_FILENAME);
+        fs::write(&backend_path, b"").unwrap();
+
+        let resolved = fs::canonicalize(&etc_dir).unwrap_or_else(|_| etc_dir.clone());
+        let Some(wsl_path) = win_to_wsl_path(&resolved.to_string_lossy()) else {
+            let _ = fs::remove_dir_all(&base_dir);
+            return;
+        };
+
+        let link_path = format!("{}/{}", SYMLINK_BASE, SYMLINK_NAME);
+        let link_probe = format!(
+            "link={}\nif [ -L \"$link\" ]; then readlink -f \"$link\" || echo __BROKEN__; \
+elif [ -e \"$link\" ]; then echo __NONLINK__; else echo __MISSING__; fi\n",
+            bash_escape(&link_path)
+        );
+        let Ok(output) = wsl_bash_output(&link_probe) else {
+            let _ = fs::remove_dir_all(&base_dir);
+            return;
+        };
+        let link_state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        let mut cleanup_link = false;
+        match link_state.as_str() {
+            "__NONLINK__" | "__BROKEN__" => {
+                let _ = fs::remove_dir_all(&base_dir);
+                return;
+            }
+            "__MISSING__" => cleanup_link = true,
+            existing => {
+                if existing != wsl_path {
+                    let _ = fs::remove_dir_all(&base_dir);
+                    return;
+                }
+            }
+        }
+
+        let casa_path = resolve_casa_path(&backend_path).unwrap();
+        let parts: Vec<_> = casa_path.split(' ').collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1], "linux");
+        assert!(parts[0].contains(SYMLINK_NAME));
+
+        if cleanup_link {
+            let cleanup = format!(
+                "link={}\nexpected={}\nif [ -L \"$link\" ]; then \
+target=$(readlink -f \"$link\" || true); \
+if [ \"$target\" = \"$expected\" ]; then rm -f \"$link\"; fi; fi\n",
+                bash_escape(&link_path),
+                bash_escape(&wsl_path)
+            );
+            let _ = wsl_bash_output(&cleanup);
+        }
+        let _ = fs::remove_dir_all(&base_dir);
+    }
 }
