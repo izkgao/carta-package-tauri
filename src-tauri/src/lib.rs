@@ -410,44 +410,34 @@ fn resolve_casa_path(backend_path: &Path) -> AppResult<String> {
 }
 
 fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
-    #[cfg(target_os = "windows")]
-    {
-        let backend_path = resolve_backend_path(app)?;
-        let flag = if version { "--version" } else { "--help" };
+    let backend_path = resolve_backend_path(app)?;
+    let flag = if version { "--version" } else { "--help" };
 
-        let backend_win = backend_path.to_string_lossy();
-        let script = format!(
-            "set -e\nbackend_win={}\nbackend=$(wslpath -a -u \"$backend_win\")\nexec \"$backend\" {}\n",
-            bash_escape(&backend_win),
-            bash_escape(flag)
-        );
-        let output = wsl_bash_output(&script)?;
-        print!("{}", String::from_utf8_lossy(&output.stdout));
-        eprint!("{}", String::from_utf8_lossy(&output.stderr));
-
-        if !version {
-            println!("Additional Tauri flag:");
-            println!("      --inspect      Open the DevTools in the Tauri window.");
+    let output = {
+        #[cfg(target_os = "windows")]
+        {
+            let backend_win = backend_path.to_string_lossy();
+            let script = format!(
+                "set -e\nbackend_win={}\nbackend=$(wslpath -a -u \"$backend_win\")\nexec \"$backend\" {}\n",
+                bash_escape(&backend_win),
+                bash_escape(flag)
+            );
+            wsl_bash_output(&script)?
         }
-
-        Ok(())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let backend_path = resolve_backend_path(app)?;
-        let flag = if version { "--version" } else { "--help" };
-
-        let output = Command::new(backend_path).arg(flag).output()?;
-        print!("{}", String::from_utf8_lossy(&output.stdout));
-        eprint!("{}", String::from_utf8_lossy(&output.stderr));
-
-        if !version {
-            println!("Additional Tauri flag:");
-            println!("      --inspect      Open the DevTools in the Tauri window.");
+        #[cfg(target_os = "macos")]
+        {
+            Command::new(backend_path).arg(flag).output()?
         }
+    };
 
-        Ok(())
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+
+    if !version {
+        println!("Additional Tauri flag:");
+        println!("      --inspect      Open the DevTools in the Tauri window.");
     }
+    Ok(())
 }
 
 fn pipe_output<T: std::io::Read + Send + 'static>(reader: T, is_stderr: bool) {
