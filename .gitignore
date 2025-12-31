@@ -24,5 +24,7 @@ dist-ssr
 *.sw?
 
 # carta
-src-tauri/backend/
-src-tauri/frontend/
+src-tauri/backend/bin/*
+src-tauri/backend/etc/*
+src-tauri/backend/libs/*
+src-tauri/frontend/*
