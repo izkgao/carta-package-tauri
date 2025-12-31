@@ -110,6 +110,8 @@ struct AppState {
     backend_token: String,
     window_url: String,
     inspect: bool,
+    #[cfg(target_os = "windows")]
+    launcher_script: Mutex<Option<PathBuf>>,
 }
 
 fn parse_cli_args() -> CliArgs {
@@ -499,9 +501,9 @@ exec "$backend" "$base" --port={port} --frontend_folder="$frontend" --no_browser
 "#
         );
 
-        // Write script to temp file
+        // Write script to a unique temp file to avoid clobbering across launches
         let temp_dir = std::env::temp_dir();
-        let script_file = temp_dir.join("carta_launcher.sh");
+        let script_file = temp_dir.join(format!("carta_launcher-{}.sh", uuid::Uuid::new_v4()));
         fs::write(&script_file, &script)
             .map_err(|e| AppError(format!("Failed to write script: {}", e)))?;
         let script_wsl = win_to_wsl_path(&script_file.to_string_lossy())
@@ -527,6 +529,11 @@ exec "$backend" "$base" --port={port} --frontend_folder="$frontend" --no_browser
         }
 
         *state.backend.lock().unwrap() = Some(child);
+        // Replace any previous launcher script path and clean it up.
+        let mut script_guard = state.launcher_script.lock().unwrap();
+        if let Some(prev) = script_guard.replace(script_file) {
+            let _ = fs::remove_file(prev);
+        }
         Ok(())
     }
     #[cfg(target_os = "macos")]
@@ -735,6 +742,10 @@ fn shutdown_backend(state: &AppState) {
         let _ = child.kill();
         let _ = child.wait();
     }
+    #[cfg(target_os = "windows")]
+    if let Some(script_path) = state.launcher_script.lock().unwrap().take() {
+        let _ = fs::remove_file(script_path);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -764,6 +775,8 @@ pub fn run() {
         backend_token,
         window_url,
         inspect: cli.inspect,
+        #[cfg(target_os = "windows")]
+        launcher_script: Mutex::new(None),
     };
 
     let extra_args = cli.extra_args.clone();
