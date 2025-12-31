@@ -348,9 +348,9 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
             .creation_flags(CREATE_NO_WINDOW);
 
         if ln_cmd.status().map(|s| s.success()).unwrap_or(false) {
-            return Ok(link_path);
+            Ok(link_path)
         } else {
-            return Ok(wsl_path);
+            Err("failed to create symlink for etc path with spaces".into())
         }
     }
 
@@ -380,12 +380,11 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
             let _ = fs::remove_file(&link_path);
         }
 
-        #[cfg(unix)]
         if std::os::unix::fs::symlink(&resolved, &link_path).is_ok() {
-            return Ok(link_path.to_string_lossy().into_owned());
+            Ok(link_path.to_string_lossy().into_owned())
+        } else {
+            Err("failed to create symlink for etc path with spaces".into())
         }
-
-        Ok(resolved.to_string_lossy().into_owned())
     }
 }
 
