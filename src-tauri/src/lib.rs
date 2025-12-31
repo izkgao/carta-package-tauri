@@ -799,12 +799,18 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { .. } = event {
-                let app = window.app_handle();
-                if app.webview_windows().len() <= 1 {
-                    save_window_bounds(app, window);
-                    app.exit(0);
+            match event {
+                WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                    save_window_bounds(window.app_handle(), window);
                 }
+                WindowEvent::CloseRequested { .. } => {
+                    let app = window.app_handle();
+                    save_window_bounds(app, window);
+                    if app.webview_windows().len() <= 1 {
+                        app.exit(0);
+                    }
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())
