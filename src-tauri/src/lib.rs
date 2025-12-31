@@ -481,30 +481,22 @@ fn spawn_backend(
             .collect::<Vec<_>>()
             .join(" ");
 
+        let auth_token = &state.backend_token;
+        let port = state.backend_port;
         // Write script to temp file to avoid PowerShell escaping issues
         let script = format!(
             r#"#!/bin/bash
 set -e
-backend="{}"
-frontend="{}"
-base="{}"
-auth_token="{}"
-libs_path="{}"
+backend="{backend}"
+frontend="{frontend}"
+base="{base}"
+auth_token="{auth_token}"
+libs_path="{libs}"
 export LD_LIBRARY_PATH="$libs_path:$LD_LIBRARY_PATH"
-export {}="$auth_token"
-export {}="{}"
-exec "$backend" "$base" --port={} --frontend_folder="$frontend" --no_browser {}
-"#,
-            backend,
-            frontend,
-            base,
-            state.backend_token,
-            libs,
-            ENV_AUTH_TOKEN,
-            ENV_CASAPATH,
-            casa_path,
-            state.backend_port,
-            extra
+export {ENV_AUTH_TOKEN}="$auth_token"
+export {ENV_CASAPATH}="{casa_path}"
+exec "$backend" "$base" --port={port} --frontend_folder="$frontend" --no_browser {extra}
+"#
         );
 
         // Write script to temp file
