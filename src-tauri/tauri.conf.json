@@ -10,8 +10,15 @@
     }
   },
   "bundle": {
+    "macOS": {
+      "entitlements": "./Entitlements.plist"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "skip"
+      }
+    },
     "active": true,
-    "targets": "all",
     "resources": [
       "backend/bin/carta_backend",
       "backend/etc/**/*",
