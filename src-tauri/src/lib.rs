@@ -126,9 +126,9 @@ where
             "--" => {
                 for rest in iter {
                     if result.input_path.is_none() {
-                        result.input_path = Some(rest.clone());
+                        result.input_path = Some(rest);
                     } else {
-                        result.extra_args.push(rest.clone());
+                        result.extra_args.push(rest);
                     }
                 }
                 break;
@@ -142,7 +142,7 @@ where
                     && let Some(next) = iter.peek()
                     && !next.starts_with('-')
                 {
-                    result.extra_args.push(iter.next().unwrap().clone());
+                    result.extra_args.push(iter.next().unwrap());
                 }
             }
             _ if result.input_path.is_none() => result.input_path = Some(arg.clone()),
@@ -855,6 +855,13 @@ mod tests {
         let parsed = parse_args(&["--foo", "bar", "file"]);
         assert_eq!(parsed.input_path.as_deref(), Some("file"));
         assert_eq!(parsed.extra_args, vec!["--foo", "bar"]);
+    }
+
+    #[test]
+    fn parse_cli_args_handles_positional_args() {
+        let parsed = parse_args(&["file1", "file2", "file3"]);
+        assert_eq!(parsed.input_path.as_deref(), Some("file1"));
+        assert_eq!(parsed.extra_args, vec!["file2", "file3"]);
     }
 
     #[cfg(target_os = "macos")]
