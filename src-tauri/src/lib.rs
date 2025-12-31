@@ -407,6 +407,8 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
 
 fn resolve_casa_path(backend_path: &Path) -> AppResult<String> {
     let etc_path = resolve_etc_path(backend_path)?;
+    // The "../../../../../" prefix clears the hardcoded absolute path from the build machine
+    // embedded in carta_backend, allowing us to specify the correct etc directory path.
     Ok(format!("../../../../../{} linux", etc_path))
 }
 
