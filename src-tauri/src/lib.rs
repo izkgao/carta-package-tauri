@@ -383,7 +383,7 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
             return Ok(link_path.to_string_lossy().into_owned());
         }
 
-        return Ok(resolved.to_string_lossy().into_owned());
+        Ok(resolved.to_string_lossy().into_owned())
     }
 }
 
@@ -527,7 +527,7 @@ exec "$backend" "$base" --port={port} --frontend_folder="$frontend" --no_browser
         }
 
         *state.backend.lock().unwrap() = Some(child);
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     {
@@ -557,7 +557,7 @@ exec "$backend" "$base" --port={port} --frontend_folder="$frontend" --no_browser
         }
 
         *state.backend.lock().unwrap() = Some(child);
-        return Ok(());
+        Ok(())
     }
 }
 
