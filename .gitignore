@@ -27,3 +27,7 @@ src-tauri/backend/bin/*
 src-tauri/backend/etc/*
 src-tauri/backend/libs/*
 src-tauri/frontend/*
+!src-tauri/backend/bin/.gitkeep
+!src-tauri/backend/etc/.gitkeep
+!src-tauri/backend/libs/.gitkeep
+!src-tauri/frontend/.gitkeep
