@@ -233,6 +233,7 @@ TARGET_EXEC="$BINDIR/carta_backend"
 # Start the recursive copy process with the main binary
 echo "--------------------------------------------------------"
 echo "2. Copy libs..."
+echo "--------------------------------------------------------"
 copy_dependencies "$BACKEND_BUILD_PATH/carta_backend"
 
 # Process all libraries in the libs directory to ensure complete dependency resolution
@@ -255,6 +256,8 @@ if [ -s "$MISSING_FILE" ]; then
     rm -f "$MISSING_FILE"
     exit 1
 fi
+
+echo "All libs copied."
 
 # Clean up temp file
 rm -f "$PROCESSED_FILE"
@@ -301,12 +304,12 @@ done
 # Download measures data to etc/data
 echo "--------------------------------------------------------"
 echo "3. Download etc/data..."
-# cd "$ETCDIR"
-# mkdir -p data
-# cd data
-# wget https://www.astron.nl/iers/WSRT_Measures.ztar
-# tar xfz WSRT_Measures.ztar
-# rm WSRT_Measures.ztar
+cd "$ETCDIR"
+mkdir -p data
+cd data
+wget https://www.astron.nl/iers/WSRT_Measures.ztar
+tar xfz WSRT_Measures.ztar
+rm WSRT_Measures.ztar
 
 echo "--------------------------------------------------------"
 echo "4. Sign binary and libraries..."
