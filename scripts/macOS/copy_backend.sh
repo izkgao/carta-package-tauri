@@ -40,6 +40,26 @@ extract_path() {
     fi
 }
 
+common_search_paths() {
+    for path in \
+        "$EXEC_DIR" \
+        "$EXEC_DIR/../Frameworks" \
+        "$EXEC_DIR/lib" \
+        "$EXEC_DIR/../lib" \
+        /opt/homebrew/opt/*/lib \
+        "/opt/homebrew/lib" \
+        "/opt/carta-casacore/lib" \
+        "/opt/carta-casacore/libs" \
+        "/opt/casaroot-carta-casacore/lib" \
+        "/usr/local/lib" \
+        "/opt/local/lib" \
+        "/usr/lib"; do
+        if [ -d "$path" ]; then
+            echo "$path"
+        fi
+    done
+}
+
 # Function to find the actual path for an @rpath reference
 resolve_rpath() {
     local binary=$1
@@ -59,7 +79,9 @@ resolve_rpath() {
 
     # If no RPATHs found, try looking in common locations
     if [ -z "$rpaths" ]; then
-        rpaths="$EXEC_DIR $EXEC_DIR/../Frameworks $EXEC_DIR/lib $EXEC_DIR/../lib /usr/local/lib /opt/homebrew/opt/ /opt/carta-casacore/lib /opt/casaroot-carta-casacore/lib"
+        rpaths="$(common_search_paths)"
+    else
+        rpaths="$rpaths $(common_search_paths)"
     fi
 
     # Try each RPATH to find the library
@@ -79,14 +101,6 @@ resolve_rpath() {
         fi
     done
     
-    # Also check in common system locations
-    for path in "/usr/local/lib" "/opt/local/lib" "/opt/carta-casacore/lib" "/opt/carta-casacore/libs" "/usr/lib"; do
-        if [ -f "$path/$lib_name" ]; then
-            echo "$path/$lib_name"
-            return 0
-        fi
-    done
-    
     # Library not found
     echo ""
     return 1
@@ -94,19 +108,7 @@ resolve_rpath() {
 
 find_common_lib() {
     local lib_name="$1"
-    local search_paths=(
-        "$EXEC_DIR"
-        "$EXEC_DIR/../lib"
-        "$EXEC_DIR/lib"
-        "/usr/local/lib"
-        "/opt/homebrew/lib"
-        "/opt/carta-casacore/lib"
-        "/opt/carta-casacore/libs"
-        "/opt/local/lib"
-        "/usr/lib"
-    )
-
-    for path in "${search_paths[@]}"; do
+    for path in $(common_search_paths); do
         if [ -f "$path/$lib_name" ]; then
             echo "$path/$lib_name"
             return 0
