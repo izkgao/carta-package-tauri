@@ -1,4 +1,81 @@
-## Prerequisites
+# Desktop application of CARTA
+
+## macOS
+
+### Prerequisites
+- Rust
+    - `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+    - After installation, logout and login again to make sure the environment variables are updated.
+- Tauri
+    - `cargo install tauri-cli`
+
+### Packaging process
+
+1. Build carta-casacore
+
+    It is essential that carta-casacore is built and installed with a floating root flag: `-DDATA_DIR="%CASAROOT%/data"`. This ensures casacore will be able to look for the measures data that we bundle with the package:
+    ```
+    git clone https://github.com/CARTAvis/carta-casacore.git --recursive
+    cd carta-casacore
+    mkdir -p build
+    cd build
+    cmake .. -DUSE_FFTW3=ON -DUSE_HDF5=ON -DUSE_THREADS=ON -DUSE_OPENMP=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_PYTHON=OFF -DUseCcache=1 -DHAS_CXX11=1 -DDATA_DIR="%CASAROOT%/data" -DCMAKE_INSTALL_PREFIX=/opt/casaroot-carta-casacore
+    make -j 4
+    sudo make install
+    ```
+
+2. Prepare carta-backend
+
+    Build the carta-backend with the `-DCartaUserFolderPrefix=` flag. If it is a beta-release, use `.carta-beta`, if it is a normal release, use `.carta`. Also, make sure to ‘checkout’ the correct branch/tag.
+    ```
+    git clone https://github.com/CARTAvis/carta-backend.git
+    cd carta-backend
+    git checkout release/4.0
+    git submodule update --init --recursive
+    mkdir build
+    cd build
+    cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCartaUserFolderPrefix=".carta" -DDEPLOYMENT_TYPE=tauri
+    make -j 4
+    ```
+
+    This step makes the `carta_backend` executable distributable on other systems. 
+    Run the `cp_libs.sh` script to copy the necessary libraries to the `libs` folder.
+    The `cp_libs.sh` script produces a modified `carta_backend` executable and a `libs` folder.
+    The modified `carta_backend` will look for library files in `../libs`, so the `carta_backend` executable needs to be relative to that, usually in a `bin` folder.
+
+
+3. Prepare carta-frontend
+
+    A production carta-frontend can either be built from source:
+    ```
+    # Install and activate emscripten
+    git clone https://github.com/emscripten-core/emsdk.git
+    cd emsdk
+    git pull
+    ./emsdk install 4.0.3
+    ./emsdk activate 4.0.3
+    source ./emsdk_env.sh
+    cd ..
+
+    # Build carta-frontend
+    git clone https://github.com/CARTAvis/carta-frontend.git
+    cd carta-frontend
+    git submodule update --init --recursive
+    npm install
+    npm run build-libs
+    npm run build
+    ```
+    OR
+    A pre-built package can be download from the NPM repository: e.g.
+    ```
+    wget https://registry.npmjs.org/carta-frontend/-/carta-frontend-5.0.3.tgz
+    tar xvf carta-frontend-5.0.3.tgz
+    ```
+
+4. Package
+
+## Windows
+### Prerequisites
 - WSL
     - Must be Windows 10 version 2004 and higher (Build 19041 and higher) or Windows 11
     - https://learn.microsoft.com/windows/wsl/install
@@ -11,12 +88,12 @@
 - Tauri
     - `cargo install tauri-cli`
 
-## Packaging process
+### Packaging process
 > **The commands below must be run in PowerShell, not in WSL.**
 
 1. Prepare frontend and backend
-    - Put Linux AppImage to root directory of this repository 
-    - Run `wsl.exe bash extract_appimage.sh`
+    - Put Linux AppImage to `scripts/Windows/`
+    - Run `wsl.exe bash scripts/Windows/extract_appimage.sh`
 2. Modify configuration
     - Modify `src-tauri/tauri.conf.json`
         - Change `version` to the version of this release

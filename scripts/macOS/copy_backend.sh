@@ -318,3 +318,4 @@ for lib in "$LIBDIR"/*; do
     [ -e "$lib" ] || continue
     codesign --force --sign - "$lib"
 done
+echo "Done!"
