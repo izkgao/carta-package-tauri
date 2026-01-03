@@ -1,7 +1,7 @@
 [package]
 name = "CARTA"
-version = "4.1.0"
-description = "2024 CARTA Desktop"
+version = "5.0.3"
+description = "2025 CARTA Desktop"
 authors = ["CARTA Development team"]
 edition = "2024"  # Rust edition, not CARTA version
 

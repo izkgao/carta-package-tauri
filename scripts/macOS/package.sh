@@ -11,8 +11,8 @@ security unlock-keychain ~/Library/Keychains/login.keychain-db
 
 # Get signing identity
 CODESIGN_LINE=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -n 1)
-IDENTITY=$(echo "$CODESIGN_LINE" | awk '{print $2}')
-ID=$(echo "$CODESIGN_LINE" | sed -n 's/.*(\([A-Z0-9]\{10\}\)).*/\1/p')
+ID=$(echo "$CODESIGN_LINE" | awk '{print $2}')
+IDENTITY=$(echo "$CODESIGN_LINE" | sed -n 's/.*(\([A-Z0-9]\{10\}\)).*/\1/p')
 
 # Set environment variables for notarization
 export APPLE_SIGNING_IDENTITY="$IDENTITY"

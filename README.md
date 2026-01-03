@@ -86,8 +86,17 @@
         - In the "Access Control" tab, set the keychain to "Allow all applications to access this item"
     
 5. Package
+    - Modify `src-tauri/tauri.conf.json`
+        - Change `version` to the version of this release
+    - Modify `src-tauri/Cargo.toml`
+        - Change `version` and `description` to the version of this release
+        - DO NOT change `edition` because it is for Rust, not CARTA version.
+    - Modify `scripts/macOS/package.sh`
+        - Change `APPLE_ID` to your Apple ID
+        - Change `APPLE_PASSWORD` to your Apple password
     - Run `sh scripts/macOS/package.sh`
-    - The package will be generated in `src-tauri/target/release/bundle/`
+        - Enter the password of your login password when prompted to unlock the keychain.
+    - The package will be generated in `src-tauri/target/release/bundle/`.
 
 
 ## Windows
@@ -127,7 +136,13 @@
 4. Get the installer from `src-tauri/target/release/bundle/`
 
 ## File and folder description
-- `extract_appimage.sh`
+- `scripts/macOS/copy_backend.sh`
+    - The script to copy CARTA backend to `src-tauri/backend/`.
+- `scripts/macOS/copy_frontend.sh`
+    - The script to copy CARTA frontend to `src-tauri/frontend/`.
+- `scripts/macOS/package.sh`
+    - The script to package CARTA for macOS.
+- `scripts/Windows/extract_appimage.sh`
     - The script to extract CARTA frontend and backend from Linux AppImage for Windows.
 - `src-tauri/build.rs`
     - The build script for Tauri. We should not modify it.
@@ -138,19 +153,19 @@
 - `src-tauri/tauri.conf.json`
     - Here you can set the name and version of the package.
 - `src-tauri/backend/`
-    - `etc/data`
-        - This should contain the `geodetic` and `ephemerides` folders required by carta-casacore. Grab the latest version from Astron when making a package:
-        ```bash
-        cd src-tauri/backend/etc/data
-        wget https://www.astron.nl/iers/WSRT_Measures.ztar
-        tar xfz WSRT_Measures.ztar
-        rm WSRT_Measures.ztar
-        ```
-    - `libs`
-        - These are the packaged library files needed by carta-backend from the packaging computer.
     - `bin`
         - `carta-backend`
             - This is the packaged carta-backend executable.
+    - `etc/data`
+        - This should contain the `geodetic` and `ephemerides` folders required by carta-casacore. Grab the latest version from Astron when making a package:
+            ```bash
+            cd src-tauri/backend/etc/data
+            wget https://www.astron.nl/iers/WSRT_Measures.ztar
+            tar xfz WSRT_Measures.ztar
+            rm WSRT_Measures.ztar
+            ```
+    - `libs`
+        - These are the packaged library files needed by carta-backend from the packaging computer.
 - `src-tauri/frontend/`
     - This contains the built frontend files.
 - `src-tauri/capabilities/` & `src-tauri/gen/`

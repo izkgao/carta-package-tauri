@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CARTA",
-  "version": "4.1.0",
+  "version": "5.0.3",
   "identifier": "CARTA-tauri",
   "app": {
     "withGlobalTauri": true,
@@ -10,9 +10,6 @@
     }
   },
   "bundle": {
-    "macOS": {
-      "entitlements": "./Entitlements.plist"
-    },
     "windows": {
       "webviewInstallMode": {
         "type": "skip"
