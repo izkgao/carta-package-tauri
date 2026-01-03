@@ -5,6 +5,7 @@ This repo contains packaging/build instructions and helper scripts for creating 
 ## Contents
 - [macOS](#macos)
 - [Windows](#windows)
+- [Build Windows installer on Linux](#build-windows-installer-on-linux)
 - [Repo layout](#repo-layout)
 
 ## macOS
@@ -144,11 +145,48 @@ This repo contains packaging/build instructions and helper scripts for creating 
     ```powershell
     cd src-tauri
     # Clean previous build
-    cargo clean
-    # Build nsis installer
+    cargo clean --release
+    # Build NSIS installer
     cargo tauri build --bundles nsis
     ```
-4. Get the installer from `src-tauri/target/release/bundle/`
+4. Get the installer from `src-tauri/target/release/bundle/nsis`
+
+## Build Windows installer on Linux
+### Prerequisites
+- Rust
+  - `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+  - After installation, log out and log back in so environment variables are updated.
+- Tauri 
+  - Tauri CLI
+    - `cargo install tauri-cli`
+  - NSIS
+    - `sudo apt install nsis`
+  - LLVM and the LLD Linker
+    - `sudo apt install lld llvm`
+  - Windows Rust target
+    - `rustup target add x86_64-pc-windows-msvc`
+  - cargo-xwin
+    - `cargo install --locked cargo-xwin`
+
+### Packaging process
+1. Prepare frontend and backend
+    - Put the Linux AppImage somewhere accessible to WSL.
+    - Run `bash scripts/Windows/extract_appimage.sh <path-to-AppImage>`
+2. Modify configuration
+    - Modify `src-tauri/tauri.conf.json`
+        - Change `version` to the version of this release
+    - Modify `src-tauri/Cargo.toml`
+        - Change `version` and `description` to the version of this release
+        - DO NOT change `edition` because it is for Rust, not CARTA version.
+3. Build tauri app
+    ```bash
+    cd src-tauri
+    # Clean previous build
+    cargo clean --release
+    # Build Windows installer
+    cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
+    ```
+4. Get the installer from `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis`
 
 ## Repo layout
 - `scripts/macOS/copy_backend.sh`
