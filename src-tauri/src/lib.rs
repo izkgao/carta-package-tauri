@@ -44,6 +44,7 @@ const CONNECT_RETRY_MS: u64 = 100;
 
 const MENU_NEW_WINDOW: &str = "new_window";
 const MENU_TOGGLE_DEVTOOLS: &str = "toggle_devtools";
+const MENU_TOGGLE_FULLSCREEN: &str = "toggle_fullscreen";
 
 #[derive(Debug, Default)]
 struct CliArgs {
@@ -676,11 +677,18 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         true,
         Some("Alt+CmdOrCtrl+I"),
     )?;
+    let toggle_fullscreen = MenuItem::with_id(
+        app,
+        MENU_TOGGLE_FULLSCREEN,
+        "Toggle Fullscreen",
+        true,
+        Some("F11"),
+    )?;
 
     let app_menu = SubmenuBuilder::new(app, &app.package_info().name)
         .item(&new_window)
         .separator()
-        .fullscreen()
+        .item(&toggle_fullscreen)
         .separator()
         .item(&toggle_devtools)
         .separator()
@@ -699,6 +707,11 @@ fn toggle_devtools(window: &WebviewWindow) {
     } else {
         window.open_devtools();
     }
+}
+
+fn toggle_fullscreen(window: &WebviewWindow) {
+    let next_state = !window.is_fullscreen().unwrap_or(false);
+    let _ = window.set_fullscreen(next_state);
 }
 
 fn create_window(app: &AppHandle, state: &AppState, label: String) -> tauri::Result<WebviewWindow> {
@@ -729,6 +742,14 @@ fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::Menu
             {
                 let _ = window.set_focus();
                 toggle_devtools(&window);
+            }
+        }
+        MENU_TOGGLE_FULLSCREEN => {
+            if let Some(window) = focused_window(app)
+                .or_else(|| app.webview_windows().values().next().cloned())
+            {
+                let _ = window.set_focus();
+                toggle_fullscreen(&window);
             }
         }
         _ => {}
