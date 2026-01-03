@@ -38,10 +38,11 @@
     make -j 4
     ```
 
-    This step makes the `carta_backend` executable distributable on other systems. 
-    Run the `cp_libs.sh` script to copy the necessary libraries to the `libs` folder.
-    The `cp_libs.sh` script produces a modified `carta_backend` executable and a `libs` folder.
-    The modified `carta_backend` will look for library files in `../libs`, so the `carta_backend` executable needs to be relative to that, usually in a `bin` folder.
+    Copy CARTA backend to `src-tauri/backend/`
+    ```
+    sh scripts/macOS/copy_backend.sh <path-to-carta-backend-build-folder>
+    ```
+    This script will copy and download the necessary files (binary, libs, and casacore data) to the `src-tauri/backend/` folder.
 
 
 3. Prepare carta-frontend
@@ -72,7 +73,22 @@
     tar xvf carta-frontend-5.0.3.tgz
     ```
 
-4. Package
+    Copy CARTA frontend to `src-tauri/frontend/`
+    ```
+    sh scripts/macOS/copy_frontend.sh <path-to-carta-frontend-build-folder>
+    ```
+
+4. Set up certificate
+    - Import developer ID certificate to Keychain Access
+        - Open Keychain Access
+        - Import the developer ID certificate and enter the password of the certificate
+        - Unfold the certificate and double-click the private key
+        - In the "Access Control" tab, set the keychain to "Allow all applications to access this item"
+    
+5. Package
+    - Run `sh scripts/macOS/package.sh`
+    - The package will be generated in `src-tauri/target/release/bundle/`
+
 
 ## Windows
 ### Prerequisites
@@ -119,8 +135,6 @@
     - The Cargo.lock generated from `Cargo.toml`. We should not modify it.
 - `src-tauri/Cargo.toml`
     - Here you can set the version and description of the package.
-- `src-tauri/Entitlements.plist`
-    - This may be necessary for CARTA to work under Apple's new stricter notarization policies. It seems to “allow-unsigned-executable-memory”.
 - `src-tauri/tauri.conf.json`
     - Here you can set the name and version of the package.
 - `src-tauri/backend/`

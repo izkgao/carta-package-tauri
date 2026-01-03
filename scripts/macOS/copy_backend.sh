@@ -311,11 +311,4 @@ wget https://www.astron.nl/iers/WSRT_Measures.ztar
 tar xfz WSRT_Measures.ztar
 rm WSRT_Measures.ztar
 
-echo "--------------------------------------------------------"
-echo "4. Sign binary and libraries..."
-codesign --force --sign - "$TARGET_EXEC"
-for lib in "$LIBDIR"/*; do
-    [ -e "$lib" ] || continue
-    codesign --force --sign - "$lib"
-done
 echo "Done!"
