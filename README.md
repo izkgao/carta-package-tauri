@@ -1,19 +1,30 @@
-# Desktop application of CARTA
+# CARTA desktop app (Tauri)
+
+This repo contains packaging/build instructions and helper scripts for creating the CARTA desktop app using Tauri.
+
+## Contents
+- [macOS](#macos)
+- [Windows](#windows)
+- [Repo layout](#repo-layout)
 
 ## macOS
 
 ### Prerequisites
+- Xcode Command Line Tools
+  - `xcode-select --install`
 - Rust
-    - `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-    - After installation, logout and login again to make sure the environment variables are updated.
-- Tauri
-    - `cargo install tauri-cli`
+  - `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+  - After installation, log out and log back in so environment variables are updated.
+- Tauri CLI
+  - `cargo install tauri-cli`
 
 ### Packaging process
 
 1. Build carta-casacore
 
-    It is essential that carta-casacore is built and installed with a floating root flag: `-DDATA_DIR="%CASAROOT%/data"`. This ensures casacore will be able to look for the measures data that we bundle with the package:
+    Build and install `carta-casacore` with the floating root flag `-DDATA_DIR="%CASAROOT%/data"`. This allows casacore to locate the measures data that is bundled with the app.
+
+    Note: keep `%CASAROOT%` literal (do not expand it in your shell).
     ```
     git clone https://github.com/CARTAvis/carta-casacore.git --recursive
     cd carta-casacore
@@ -26,7 +37,11 @@
 
 2. Prepare carta-backend
 
-    Build the carta-backend with the `-DCartaUserFolderPrefix=` flag. If it is a beta-release, use `.carta-beta`, if it is a normal release, use `.carta`. Also, make sure to ‘checkout’ the correct branch/tag.
+    Build `carta-backend` with the `-DCartaUserFolderPrefix=` flag:
+    - Beta releases: `-DCartaUserFolderPrefix=".carta-beta"`
+    - Normal releases: `-DCartaUserFolderPrefix=".carta"`
+
+    Also make sure to check out the correct branch/tag.
     ```
     git clone https://github.com/CARTAvis/carta-backend.git
     cd carta-backend
@@ -38,16 +53,16 @@
     make -j 4
     ```
 
-    Copy CARTA backend to `src-tauri/backend/`
+    Copy the backend into `src-tauri/backend/`:
     ```
     sh scripts/macOS/copy_backend.sh <path-to-carta-backend-build-folder>
     ```
-    This script will copy and download the necessary files (binary, libs, and casacore data) to the `src-tauri/backend/` folder.
+    This script copies and downloads the necessary files (binary, libs, and casacore data) into `src-tauri/backend/`.
 
 
 3. Prepare carta-frontend
 
-    A production carta-frontend can either be built from source:
+    A production `carta-frontend` can either be built from source:
     ```
     # Install and activate emscripten
     git clone https://github.com/emscripten-core/emsdk.git
@@ -67,23 +82,23 @@
     npm run build
     ```
     OR
-    A pre-built package can be download from the NPM repository: e.g.
+    a pre-built package can be downloaded from the NPM registry, for example:
     ```
     wget https://registry.npmjs.org/carta-frontend/-/carta-frontend-5.0.3.tgz
     tar xvf carta-frontend-5.0.3.tgz
     ```
 
-    Copy CARTA frontend to `src-tauri/frontend/`
+    Copy the frontend into `src-tauri/frontend/`:
     ```
     sh scripts/macOS/copy_frontend.sh <path-to-carta-frontend-build-folder>
     ```
 
 4. Set up certificate
-    - Import developer ID certificate to Keychain Access
-        - Open Keychain Access
-        - Import the developer ID certificate and enter the password of the certificate
-        - Unfold the certificate and double-click the private key
-        - In the "Access Control" tab, set the keychain to "Allow all applications to access this item"
+    - Import the Developer ID certificate into Keychain Access:
+      - Open Keychain Access
+      - Import the Developer ID certificate (enter the certificate password)
+      - Expand the certificate and double-click the private key
+      - In the "Access Control" tab, set "Allow all applications to access this item"
     
 5. Package
     - Modify `src-tauri/tauri.conf.json`
@@ -93,7 +108,7 @@
         - DO NOT change `edition` because it is for Rust, not CARTA version.
     - Modify `scripts/macOS/package.sh`
         - Change `APPLE_ID` to your Apple ID
-        - Change `APPLE_PASSWORD` to your Apple password
+        - Change `APPLE_PASSWORD` to your Apple password (prefer an app-specific password)
     - Run `sh scripts/macOS/package.sh`
         - Enter the password of your login password when prompted to unlock the keychain.
     - The package will be generated in `src-tauri/target/release/bundle/`.
@@ -117,8 +132,8 @@
 > **The commands below must be run in PowerShell, not in WSL.**
 
 1. Prepare frontend and backend
-    - Put Linux AppImage to `scripts/Windows/`
-    - Run `wsl.exe bash scripts/Windows/extract_appimage.sh`
+    - Put the Linux AppImage somewhere accessible to WSL.
+    - Run `wsl.exe bash scripts/Windows/extract_appimage.sh <path-to-AppImage>`
 2. Modify configuration
     - Modify `src-tauri/tauri.conf.json`
         - Change `version` to the version of this release
@@ -126,7 +141,7 @@
         - Change `version` and `description` to the version of this release
         - DO NOT change `edition` because it is for Rust, not CARTA version.
 3. Build tauri app
-    ```PowerShell
+    ```powershell
     cd src-tauri
     # Clean previous build
     cargo clean
@@ -135,7 +150,7 @@
     ```
 4. Get the installer from `src-tauri/target/release/bundle/`
 
-## File and folder description
+## Repo layout
 - `scripts/macOS/copy_backend.sh`
     - The script to copy CARTA backend to `src-tauri/backend/`.
 - `scripts/macOS/copy_frontend.sh`
