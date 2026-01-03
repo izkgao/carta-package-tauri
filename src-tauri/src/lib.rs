@@ -179,7 +179,7 @@ fn resolve_base_directory(input_path: Option<&str>) -> AppResult<PathBuf> {
         } else {
             Err("Requested path is neither a file nor a directory".into())
         }
-    } else if cfg!(target_os = "macos") && cwd == Path::new("/") {
+    } else if cfg!(any(target_os = "macos", target_os = "linux")) && cwd == Path::new("/") {
         home_dir().ok_or_else(|| "HOME directory not found".into())
     } else {
         Ok(cwd)
@@ -370,7 +370,7 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         // If the etc path itself does not contain spaces, use the real path directly
         if !resolved.to_string_lossy().contains(' ') {
@@ -402,6 +402,12 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
             Err("failed to create symlink for etc path with spaces".into())
         }
     }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = resolved;
+        Err("unsupported platform".into())
+    }
 }
 
 fn resolve_casa_path(backend_path: &Path) -> AppResult<String> {
@@ -411,6 +417,12 @@ fn resolve_casa_path(backend_path: &Path) -> AppResult<String> {
     Ok(format!("../../../../../{} linux", etc_path))
 }
 
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn run_backend_help(_app: &AppHandle, _version: bool) -> AppResult<()> {
+    Err("unsupported platform".into())
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
     let backend_path = resolve_backend_path(app)?;
     let flag = if version { "--version" } else { "--help" };
@@ -426,7 +438,7 @@ fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
             );
             wsl_bash_output(&script)?
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             Command::new(backend_path).arg(flag).output()?
         }
@@ -521,7 +533,7 @@ fn spawn_backend(
         *state.backend.lock().unwrap() = Some(child);
         Ok(())
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         let backend_path = resolve_backend_path(app)?;
         let frontend_path = resolve_frontend_path(app)?;
@@ -539,6 +551,24 @@ fn spawn_backend(
         let casa_path = resolve_casa_path(&backend_path)?;
         cmd.env(ENV_CASAPATH, casa_path);
 
+        #[cfg(target_os = "linux")]
+        {
+            let libs_dir = backend_path
+                .parent()
+                .map(|bin| bin.join("..").join("libs"))
+                .filter(|p| p.exists());
+            if let Some(libs_dir) = libs_dir {
+                let mut ld_library_path = libs_dir.to_string_lossy().into_owned();
+                if let Ok(existing) = std::env::var("LD_LIBRARY_PATH")
+                    && !existing.trim().is_empty()
+                {
+                    ld_library_path.push(':');
+                    ld_library_path.push_str(existing.trim());
+                }
+                cmd.env("LD_LIBRARY_PATH", ld_library_path);
+            }
+        }
+
         let mut child = cmd.spawn().map_err(AppError::from)?;
 
         if let Some(stdout) = child.stdout.take() {
@@ -550,6 +580,12 @@ fn spawn_backend(
 
         *state.backend.lock().unwrap() = Some(child);
         Ok(())
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (app, state, base_dir, extra_args);
+        Err("unsupported platform".into())
     }
 }
 
@@ -875,7 +911,7 @@ mod tests {
         assert_eq!(parsed.extra_args, vec!["file2", "file3"]);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn resolve_casa_path_uses_space_free_path() {
         let base_dir = std::env::temp_dir().join(format!("carta test {}", uuid::Uuid::new_v4()));
