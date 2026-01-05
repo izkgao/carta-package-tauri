@@ -310,6 +310,12 @@ if [ -s "$MISSING_FILE" ]; then
     exit 1
 fi
 
+echo "  Ensuring copied files are owner-writable..."
+# Some upstream libraries are shipped as read-only (e.g. mode 444). Make sure the
+# copied artifacts are writable so install_name_tool/codesign (and subsequent
+# builds that overwrite resources) won't fail with permission denied.
+find "$BINDIR" "$LIBDIR" -type f -exec chmod u+w {} + || fail "Failed to chmod u+w on copied backend files"
+
 echo "  Updating library paths..."
 
 # Update main executable to point to libraries in ../libs
