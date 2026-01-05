@@ -10,6 +10,9 @@
     }
   },
   "bundle": {
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "skip"
