@@ -38,7 +38,7 @@ const BACKEND_FILENAME: &str = "carta_backend";
 #[cfg(target_os = "windows")]
 const ENV_WSL_DISTRO: &str = "CARTA_WSL_DISTRO";
 
-const BACKEND_TIMEOUT_SECS: u64 = 20;
+const BACKEND_TIMEOUT_SECS: u64 = 60;
 const CONNECT_TIMEOUT_MS: u64 = 250;
 const CONNECT_RETRY_MS: u64 = 100;
 
