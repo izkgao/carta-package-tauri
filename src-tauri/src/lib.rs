@@ -45,6 +45,7 @@ const CONNECT_RETRY_MS: u64 = 100;
 const MENU_NEW_WINDOW: &str = "new_window";
 const MENU_TOGGLE_DEVTOOLS: &str = "toggle_devtools";
 const MENU_TOGGLE_FULLSCREEN: &str = "toggle_fullscreen";
+const MENU_QUIT: &str = "quit";
 
 #[derive(Debug, Default)]
 struct CliArgs {
@@ -721,15 +722,22 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         Some("F11"),
     )?;
 
-    let app_menu = SubmenuBuilder::new(app, &app.package_info().name)
+    let app_menu_builder = SubmenuBuilder::new(app, &app.package_info().name)
         .item(&new_window)
         .separator()
         .item(&toggle_fullscreen)
         .separator()
         .item(&toggle_devtools)
-        .separator()
-        .quit()
-        .build()?;
+        .separator();
+
+    #[cfg(target_os = "linux")]
+    let app_menu = {
+        let quit = MenuItem::with_id(app, MENU_QUIT, "Quit CARTA", true, Some("CmdOrCtrl+Q"))?;
+        app_menu_builder.item(&quit).build()?
+    };
+
+    #[cfg(not(target_os = "linux"))]
+    let app_menu = app_menu_builder.quit().build()?;
 
     MenuBuilder::new(app)
         .item(&app_menu)
@@ -787,6 +795,9 @@ fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::Menu
                 let _ = window.set_focus();
                 toggle_fullscreen(&window);
             }
+        }
+        MENU_QUIT => {
+            app.exit(0);
         }
         _ => {}
     }
