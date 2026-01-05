@@ -22,6 +22,9 @@ dist-ssr
 *.sln
 *.sw?
 
+# Local temp
+.tmp/
+
 # carta
 src-tauri/backend/bin/*
 src-tauri/backend/etc/*

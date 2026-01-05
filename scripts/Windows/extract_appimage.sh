@@ -9,8 +9,6 @@ CALL_DIR=$(pwd)
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
-cd "$SCRIPT_DIR"
-
 if [ "${1:-}" = "" ]; then
   echo "Usage: $0 <path-to-AppImage>" >&2
   exit 1
@@ -19,19 +17,28 @@ fi
 APPIMAGE_ARG="$1"
 if command -v readlink >/dev/null 2>&1; then
   if ! APPIMAGE=$(cd "$CALL_DIR" && readlink -f "$APPIMAGE_ARG"); then
-    APPIMAGE="$CALL_DIR/$APPIMAGE_ARG"
+    case "$APPIMAGE_ARG" in
+      /*) APPIMAGE="$APPIMAGE_ARG" ;;
+      *) APPIMAGE="$CALL_DIR/$APPIMAGE_ARG" ;;
+    esac
   fi
 else
-  APPIMAGE="$CALL_DIR/$APPIMAGE_ARG"
+  case "$APPIMAGE_ARG" in
+    /*) APPIMAGE="$APPIMAGE_ARG" ;;
+    *) APPIMAGE="$CALL_DIR/$APPIMAGE_ARG" ;;
+  esac
 fi
 
-# Clean up previous extracted files
+EXTRACT_WORKDIR="$PROJECT_ROOT/.tmp/appimage-extract"
+cleanup() {
+  rm -rf "$EXTRACT_WORKDIR"
+}
+trap cleanup EXIT
+
+# Clean up previous extracted files (only extraction workdir; project files cleaned after successful extraction)
 echo "Cleaning up previous extracted files..."
-rm -rf squashfs-root
-rm -rf "$PROJECT_ROOT/src-tauri/backend/bin"
-rm -rf "$PROJECT_ROOT/src-tauri/backend/libs"
-rm -rf "$PROJECT_ROOT/src-tauri/backend/etc"
-rm -rf "$PROJECT_ROOT/src-tauri/frontend"
+rm -rf "$SCRIPT_DIR/squashfs-root"
+rm -rf "$EXTRACT_WORKDIR"
 
 # Extract AppImage
 echo "Extracting AppImage..."
@@ -40,8 +47,62 @@ if [ ! -f "$APPIMAGE" ]; then
   exit 1
 fi
 
-chmod +x "$APPIMAGE"
-"$APPIMAGE" --appimage-extract > /dev/null 2>&1
+mkdir -p "$PROJECT_ROOT/.tmp"
+mkdir -p "$EXTRACT_WORKDIR"
+cd "$EXTRACT_WORKDIR"
+
+chmod +x "$APPIMAGE" 2>/dev/null || echo "Warning: unable to chmod +x: $APPIMAGE" >&2
+extract_with_7z() {
+  if command -v 7z >/dev/null 2>&1; then
+    SEVEN_Z=7z
+  elif command -v 7zz >/dev/null 2>&1; then
+    SEVEN_Z=7zz
+  elif command -v 7za >/dev/null 2>&1; then
+    SEVEN_Z=7za
+  else
+    echo "Error: 7z not found (required to extract AppImage on this platform)" >&2
+    exit 1
+  fi
+
+  echo "Using $SEVEN_Z to extract (may take a few minutes)..."
+  "$SEVEN_Z" x -y "$APPIMAGE"
+}
+
+case "$(uname -s)" in
+  Darwin)
+    extract_with_7z
+    ;;
+  *)
+    if ! "$APPIMAGE" --appimage-extract > /dev/null 2>&1; then
+      echo "Built-in AppImage extraction failed; falling back to 7z..." >&2
+      extract_with_7z
+    fi
+    ;;
+esac
+
+EXTRACT_DIR=""
+for candidate in \
+  "$EXTRACT_WORKDIR/squashfs-root" \
+  "$EXTRACT_WORKDIR/squashfs-root/squashfs-root" \
+  "$EXTRACT_WORKDIR"
+do
+  if [ -f "$candidate/bin/carta_backend" ]; then
+    EXTRACT_DIR="$candidate"
+    break
+  fi
+done
+
+if [ "$EXTRACT_DIR" = "" ]; then
+  echo "Error: Extracted content not found (missing bin/carta_backend)" >&2
+  echo "Tried: $EXTRACT_WORKDIR/squashfs-root, $EXTRACT_WORKDIR" >&2
+  exit 1
+fi
+
+# Clean project directories after successful extraction (avoids leaving the repo empty if extraction fails)
+rm -rf "$PROJECT_ROOT/src-tauri/backend/bin"
+rm -rf "$PROJECT_ROOT/src-tauri/backend/libs"
+rm -rf "$PROJECT_ROOT/src-tauri/backend/etc"
+rm -rf "$PROJECT_ROOT/src-tauri/frontend"
 
 # Create directories
 echo "Preparing directories..."
@@ -56,15 +117,15 @@ touch "$PROJECT_ROOT/src-tauri/frontend/.gitkeep"
 
 # Copy backend
 echo "Copying backend files..."
-cp squashfs-root/bin/carta_backend "$PROJECT_ROOT/src-tauri/backend/bin/."
-cp squashfs-root/lib/* "$PROJECT_ROOT/src-tauri/backend/libs/."
-cp -R squashfs-root/etc/* "$PROJECT_ROOT/src-tauri/backend/etc/."
+cp "$EXTRACT_DIR/bin/carta_backend" "$PROJECT_ROOT/src-tauri/backend/bin/."
+cp "$EXTRACT_DIR/lib/"* "$PROJECT_ROOT/src-tauri/backend/libs/."
+cp -R "$EXTRACT_DIR/etc/"* "$PROJECT_ROOT/src-tauri/backend/etc/."
 
 # Copy frontend
 echo "Copying frontend files..."
-cp -R squashfs-root/share/carta/frontend/* "$PROJECT_ROOT/src-tauri/frontend/."
+cp -R "$EXTRACT_DIR/share/carta/frontend/"* "$PROJECT_ROOT/src-tauri/frontend/."
 
 # Delete extracted files
 echo "Cleaning up..."
-rm -rf squashfs-root
+rm -rf "$EXTRACT_WORKDIR"
 echo "Done!"
