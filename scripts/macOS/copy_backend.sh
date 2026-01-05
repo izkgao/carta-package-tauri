@@ -75,6 +75,7 @@ common_search_paths() {
         "$EXEC_DIR/../Frameworks" \
         "$EXEC_DIR/lib" \
         "$EXEC_DIR/../lib" \
+        "$EXEC_DIR/../libs" \
         /opt/homebrew/opt/*/lib \
         "/opt/homebrew/lib" \
         "/opt/carta-casacore/lib" \
@@ -284,11 +285,11 @@ copy_dependencies() {
 echo "1. Copy carta_backend..."
 cp "$BACKEND_EXEC" "$BINDIR/" || fail "Failed to copy carta_backend to $BINDIR"
 TARGET_EXEC="$BINDIR/carta_backend"
+echo "  Done!"
 
 # Start the recursive copy process with the main binary
 echo "--------------------------------------------------------"
-echo "2. Copy libs..."
-echo "--------------------------------------------------------"
+echo "2. Copy libraries..."
 copy_dependencies "$BACKEND_EXEC"
 
 # Process all libraries in the libs directory to ensure complete dependency resolution
@@ -309,10 +310,7 @@ if [ -s "$MISSING_FILE" ]; then
     exit 1
 fi
 
-echo "All libs copied."
-
-echo "--------------------------------------------------------"
-echo "Updating library paths..."
+echo "  Updating library paths..."
 
 # Update main executable to point to libraries in ../libs
 for lib in "$LIBDIR"/*; do
@@ -338,7 +336,6 @@ done
 # Update libraries to point to each other using @loader_path
 for lib in "$LIBDIR"/*; do
     [ -e "$lib" ] || continue
-    echo "Processing $lib"
     otool -L "$lib" | awk 'NR>1 {print $1}' | while read dep; do
         if [[ "$dep" == /usr/lib/* || "$dep" == /System/* || "$dep" == @loader_path* ]]; then
             continue
@@ -355,9 +352,20 @@ for lib in "$LIBDIR"/*; do
         || fail "install_name_tool failed for $lib"
 done
 
+echo "  Done!"
+
+echo "--------------------------------------------------------"
+echo "3. Sign files..."
+
+# Sign the executable
+codesign --force --sign - "$TARGET_EXEC" || fail "codesign failed for $TARGET_EXEC"
+# Sign libraries
+codesign --force --sign - "$LIBDIR"/* || fail "codesign failed for $LIBDIR"
+echo "  Done!"
+
 # Download measures data to etc/data
 echo "--------------------------------------------------------"
-echo "3. Download etc/data..."
+echo "4. Download etc/data..."
 cd "$ETCDIR" || fail "Failed to cd to $ETCDIR"
 mkdir -p data || fail "Failed to create $ETCDIR/data"
 cd data || fail "Failed to cd to $ETCDIR/data"
@@ -374,4 +382,6 @@ fi
 tar xfz "$MEASURES_ARCHIVE" || fail "Failed to extract measures data"
 rm -f "$MEASURES_ARCHIVE" || fail "Failed to remove $MEASURES_ARCHIVE"
 
-echo "Done!"
+echo "  Done!"
+echo "--------------------------------------------------------"
+echo "All done!"
