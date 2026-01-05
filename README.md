@@ -154,7 +154,7 @@ The installer will be generated in `src-tauri/target/release/bundle/nsis`.
 ### Prerequisites
 - Rust
   - `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-  - After installation, log out and log back in so environment variables are updated.
+  - After installation, log out and log back to your terminal so environment variables are updated.
 - Tauri 
   - Tauri CLI
     - `cargo install tauri-cli`
@@ -196,7 +196,6 @@ The installer will be generated in `src-tauri/target/x86_64-pc-windows-msvc/rele
 - `src-tauri/build.rs`: Tauri build script (internal; do not modify).
 - `src-tauri/Cargo.lock`: Cargo dependency lockfile (auto-generated).
 - `src-tauri/Cargo.toml`: Package configuration for versioning and dependencies.
-- `src-tauri/entitlements.plist`: Required to prevent permission and code signing conflicts when running `cargo clippy` or `cargo check` after a `cargo tauri dev` session.
 - `src-tauri/tauri.conf.json`: Core Tauri configuration (application name, version, etc.).
 - `src-tauri/backend/`:
     - `bin/carta-backend`: The packaged CARTA backend executable.
