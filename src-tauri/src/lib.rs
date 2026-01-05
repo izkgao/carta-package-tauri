@@ -722,7 +722,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         Some("F11"),
     )?;
 
-    let app_menu_builder = SubmenuBuilder::new(app, &app.package_info().name)
+    let file_menu_builder = SubmenuBuilder::new(app, "File")
         .item(&new_window)
         .separator()
         .item(&toggle_fullscreen)
@@ -730,19 +730,26 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         .item(&toggle_devtools)
         .separator();
 
-    #[cfg(target_os = "linux")]
-    let app_menu = {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let file_menu = {
         let quit = MenuItem::with_id(app, MENU_QUIT, "Quit CARTA", true, Some("CmdOrCtrl+Q"))?;
-        app_menu_builder.item(&quit).build()?
+        file_menu_builder.item(&quit).build()?
     };
 
-    #[cfg(not(target_os = "linux"))]
-    let app_menu = app_menu_builder.quit().build()?;
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let file_menu = file_menu_builder.build()?;
 
-    MenuBuilder::new(app)
-        .item(&app_menu)
-        .item(&edit_menu)
-        .build()
+    #[cfg(target_os = "macos")]
+    let app_menu = SubmenuBuilder::new(app, &app.package_info().name)
+        .separator()
+        .quit_with_text("Quit CARTA")
+        .build()?;
+
+    let menu_builder = MenuBuilder::new(app);
+    #[cfg(target_os = "macos")]
+    let menu_builder = menu_builder.item(&app_menu);
+
+    menu_builder.item(&file_menu).item(&edit_menu).build()
 }
 
 fn toggle_devtools(window: &WebviewWindow) {
@@ -797,6 +804,7 @@ fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::Menu
             }
         }
         MENU_QUIT => {
+            shutdown_backend(state);
             app.exit(0);
         }
         _ => {}
