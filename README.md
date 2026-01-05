@@ -1,12 +1,13 @@
 # CARTA desktop app (Tauri)
 
-This repo contains packaging/build instructions and helper scripts for creating the CARTA desktop app using Tauri.
+This repository contains build instructions and helper scripts for packaging the CARTA desktop application using Tauri.
 
 ## Contents
 - [macOS](#macos)
 - [Windows](#windows)
-- [Build Windows installer on Linux](#build-windows-installer-on-linux)
-- [Repo layout](#repo-layout)
+    - [Build Windows installer on Windows](#windows)
+    - [Build Windows installer on Linux](#build-windows-installer-on-linux)
+- [Project Structure](#project-structure)
 
 ## macOS
 
@@ -19,30 +20,30 @@ This repo contains packaging/build instructions and helper scripts for creating 
 - Tauri CLI
   - `cargo install tauri-cli`
 
-### Packaging process
+### Packaging Process
 
-1. Build carta-casacore
+#### 1. Build and Install carta-casacore
 
-    Build and install `carta-casacore` with the floating root flag `-DDATA_DIR="%CASAROOT%/data"`. This allows casacore to locate the measures data that is bundled with the app.
+Build and install `carta-casacore` using the floating root flag `-DDATA_DIR="%CASAROOT%/data"`. This configuration allows `casacore` to locate bundled measures data.
 
-    Note: keep `%CASAROOT%` literal (do not expand it in your shell).
-    ```
-    git clone https://github.com/CARTAvis/carta-casacore.git --recursive
-    cd carta-casacore
-    mkdir -p build
-    cd build
-    cmake .. -DUSE_FFTW3=ON -DUSE_HDF5=ON -DUSE_THREADS=ON -DUSE_OPENMP=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_PYTHON=OFF -DUseCcache=1 -DHAS_CXX11=1 -DDATA_DIR="%CASAROOT%/data" -DCMAKE_INSTALL_PREFIX=/opt/casaroot-carta-casacore
-    make -j 4
-    sudo make install
-    ```
+**Note:** Keep `%CASAROOT%` literal in the command (do not expand it in your shell).
+```
+git clone https://github.com/CARTAvis/carta-casacore.git --recursive
+cd carta-casacore
+mkdir -p build
+cd build
+cmake .. -DUSE_FFTW3=ON -DUSE_HDF5=ON -DUSE_THREADS=ON -DUSE_OPENMP=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_PYTHON=OFF -DUseCcache=1 -DHAS_CXX11=1 -DDATA_DIR="%CASAROOT%/data" -DCMAKE_INSTALL_PREFIX=/opt/casaroot-carta-casacore
+make -j 4
+sudo make install
+```
 
-2. Prepare carta-backend
+#### 2. Prepare carta-backend
 
-    Build `carta-backend` with the `-DCartaUserFolderPrefix=` flag:
+Build `carta-backend` with the appropriate `-DCartaUserFolderPrefix` flag:
     - Beta releases: `-DCartaUserFolderPrefix=".carta-beta"`
     - Normal releases: `-DCartaUserFolderPrefix=".carta"`
 
-    Also make sure to check out the correct branch/tag.
+    Ensure the correct branch or tag is checked out:
     ```
     git clone https://github.com/CARTAvis/carta-backend.git
     cd carta-backend
@@ -54,16 +55,18 @@ This repo contains packaging/build instructions and helper scripts for creating 
     make -j 4
     ```
 
-    Copy the backend into `src-tauri/backend/`:
+    Copy the backend to `src-tauri/backend/`:
+    ```bash
+    bash scripts/macOS/copy_backend.sh <path-to-backend-build-folder>
     ```
-    sh scripts/macOS/copy_backend.sh <path-to-carta-backend-build-folder>
-    ```
-    This script copies and downloads the necessary files (binary, libs, and casacore data) into `src-tauri/backend/`.
+    This script automates the transfer of binaries, libraries, and casacore data into the Tauri source tree.
 
 
-3. Prepare carta-frontend
+#### 3. Prepare carta-frontend
 
-    A production `carta-frontend` can either be built from source:
+The `carta-frontend` production build can be prepared from source or downloaded as a pre-built package.
+
+#### Option A: Build from Source
     ```
     # Install and activate emscripten
     git clone https://github.com/emscripten-core/emsdk.git
@@ -82,37 +85,34 @@ This repo contains packaging/build instructions and helper scripts for creating 
     npm run build-libs
     npm run build
     ```
-    OR
-    a pre-built package can be downloaded from the NPM registry, for example:
+#### Option B: Download Pre-built Package
+    A pre-built package is available via the NPM registry:
     ```
     wget https://registry.npmjs.org/carta-frontend/-/carta-frontend-5.0.3.tgz
     tar xvf carta-frontend-5.0.3.tgz
     ```
 
-    Copy the frontend into `src-tauri/frontend/`:
-    ```
-    sh scripts/macOS/copy_frontend.sh <path-to-carta-frontend-build-folder>
-    ```
+Copy the frontend to `src-tauri/frontend/`:
+```bash
+bash scripts/macOS/copy_frontend.sh <path-to-frontend-build-folder>
+```
 
-4. Set up certificate
-    - Import the Developer ID certificate into Keychain Access:
-      - Open Keychain Access
-      - Import the Developer ID certificate (enter the certificate password)
-      - Expand the certificate and double-click the private key
-      - In the "Access Control" tab, set "Allow all applications to access this item"
+#### 4. Configure Certificate
+1. Import the **Developer ID** certificate into **Keychain Access**.
+2. Expand the certificate and double-click the private key.
+3. In the **Access Control** tab, select **"Allow all applications to access this item"**.
     
-5. Package
-    - Modify `src-tauri/tauri.conf.json`
-        - Change `version` to the version of this release
-    - Modify `src-tauri/Cargo.toml`
-        - Change `version` and `description` to the version of this release
-        - DO NOT change `edition` because it is for Rust, not CARTA version.
-    - Modify `scripts/macOS/package.sh`
-        - Change `APPLE_ID` to your Apple ID
-        - Change `APPLE_PASSWORD` to your Apple password (prefer an app-specific password)
-    - Run `sh scripts/macOS/package.sh`
-        - Enter the password of your login password when prompted to unlock the keychain.
-    - The package will be generated in `src-tauri/target/release/bundle/`.
+#### 5. Package Application
+1. Update versioning:
+    - `src-tauri/tauri.conf.json`: Update the `version` field.
+    - `src-tauri/Cargo.toml`: Update `version` and `description`. (Note: Do not modify the Rust `edition`).
+2. Configure packaging script:
+    - `scripts/macOS/package.sh`: Set `APPLE_ID` and `APPLE_PASSWORD` (use an app-specific password).
+3. Execute build:
+    - Run `bash scripts/macOS/package.sh`.
+    - Provide the login password when prompted to unlock the keychain.
+
+The generated package will be located in `src-tauri/target/release/bundle/`.
 
 
 ## Windows
@@ -129,27 +129,26 @@ This repo contains packaging/build instructions and helper scripts for creating 
 - Tauri
     - `cargo install tauri-cli`
 
-### Packaging process
-> **The commands below must be run in PowerShell, not in WSL.**
+### Packaging Process
+> **Note:** The following commands must be executed in PowerShell, not in WSL.
 
-1. Prepare frontend and backend
-    - Put the Linux AppImage somewhere accessible to WSL.
-    - Run `wsl.exe bash scripts/Windows/extract_appimage.sh <path-to-AppImage>`
-2. Modify configuration
-    - Modify `src-tauri/tauri.conf.json`
-        - Change `version` to the version of this release
-    - Modify `src-tauri/Cargo.toml`
-        - Change `version` and `description` to the version of this release
-        - DO NOT change `edition` because it is for Rust, not CARTA version.
-3. Build tauri app
-    ```powershell
-    cd src-tauri
-    # Clean previous build
-    cargo clean --release
-    # Build NSIS installer
-    cargo tauri build --bundles nsis
-    ```
-4. Get the installer from `src-tauri/target/release/bundle/nsis`
+#### 1. Prepare Frontend and Backend
+- Place the Linux AppImage in a location accessible to WSL.
+- Execute: `wsl.exe bash scripts/Windows/extract_appimage.sh <path-to-AppImage>`
+
+#### 2. Update Configuration
+- `src-tauri/tauri.conf.json`: Update the `version` field.
+- `src-tauri/Cargo.toml`: Update `version` and `description`. (Note: Do not modify the Rust `edition`).
+
+#### 3. Build Tauri Application
+```powershell
+cd src-tauri
+# Clean previous build artifacts
+cargo clean --release
+# Generate NSIS installer
+cargo tauri build --bundles nsis
+```
+The installer will be generated in `src-tauri/target/release/bundle/nsis`.
 
 ## Build Windows installer on Linux
 ### Prerequisites
@@ -168,67 +167,52 @@ This repo contains packaging/build instructions and helper scripts for creating 
   - cargo-xwin
     - `cargo install --locked cargo-xwin`
 
-### Packaging process
-1. Prepare frontend and backend
-    - Put the Linux AppImage somewhere accessible to WSL.
-    - Run `bash scripts/Windows/extract_appimage.sh <path-to-AppImage>`
-2. Modify configuration
-    - Modify `src-tauri/tauri.conf.json`
-        - Change `version` to the version of this release
-    - Modify `src-tauri/Cargo.toml`
-        - Change `version` and `description` to the version of this release
-        - DO NOT change `edition` because it is for Rust, not CARTA version.
-3. Build tauri app
-    ```bash
-    cd src-tauri
-    # Clean previous build
-    cargo clean --release
-    # Build Windows installer
-    cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
-    ```
-4. Get the installer from `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis`
+### Packaging Process
+#### 1. Prepare Frontend and Backend
+- Place the Linux AppImage in an accessible location.
+- Execute: `bash scripts/Windows/extract_appimage.sh <path-to-AppImage>`
 
-## Repo layout
-- `scripts/macOS/copy_backend.sh`
-    - The script to copy CARTA backend to `src-tauri/backend/`.
-- `scripts/macOS/copy_frontend.sh`
-    - The script to copy CARTA frontend to `src-tauri/frontend/`.
-- `scripts/macOS/package.sh`
-    - The script to package CARTA for macOS.
-- `scripts/Windows/extract_appimage.sh`
-    - The script to extract CARTA frontend and backend from Linux AppImage for Windows.
-- `src-tauri/build.rs`
-    - The build script for Tauri. We should not modify it.
-- `src-tauri/Cargo.lock`
-    - The Cargo.lock generated from `Cargo.toml`. We should not modify it.
-- `src-tauri/Cargo.toml`
-    - Here you can set the version and description of the package.
-- `src-tauri/tauri.conf.json`
-    - Here you can set the name and version of the package.
-- `src-tauri/backend/`
-    - `bin`
-        - `carta-backend`
-            - This is the packaged carta-backend executable.
-    - `etc/data`
-        - This should contain the `geodetic` and `ephemerides` folders required by carta-casacore. Grab the latest version from Astron when making a package:
+#### 2. Update Configuration
+- `src-tauri/tauri.conf.json`: Update the `version` field.
+- `src-tauri/Cargo.toml`: Update `version` and `description`. (Note: Do not modify the Rust `edition`).
+
+#### 3. Build Tauri Application
+```bash
+cd src-tauri
+# Clean previous build artifacts
+cargo clean --release
+# Generate Windows installer
+cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
+```
+
+#### 4. Output
+The installer will be generated in `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis`.
+
+## Project Structure
+- `scripts/macOS/copy_backend.sh`: Copies the CARTA backend into `src-tauri/backend/`.
+- `scripts/macOS/copy_frontend.sh`: Copies the CARTA frontend into `src-tauri/frontend/`.
+- `scripts/macOS/package.sh`: Automates the macOS packaging and notarization process.
+- `scripts/Windows/extract_appimage.sh`: Extracts the CARTA frontend and backend from a Linux AppImage for Windows builds.
+- `src-tauri/build.rs`: Tauri build script (internal; do not modify).
+- `src-tauri/Cargo.lock`: Cargo dependency lockfile (auto-generated).
+- `src-tauri/Cargo.toml`: Package configuration for versioning and dependencies.
+- `src-tauri/entitlements.plist`: Required to prevent permission and code signing conflicts when running `cargo clippy` or `cargo check` after a `cargo tauri dev` session.
+- `src-tauri/tauri.conf.json`: Core Tauri configuration (application name, version, etc.).
+- `src-tauri/backend/`:
+    - `bin/carta-backend`: The packaged CARTA backend executable.
+    - `etc/data/`: Contains `geodetic` and `ephemerides` data required by `carta-casacore`.
+        - **Note:** Retrieve the latest version from Astron during packaging:
             ```bash
             cd src-tauri/backend/etc/data
             wget https://www.astron.nl/iers/WSRT_Measures.ztar
             tar xfz WSRT_Measures.ztar
             rm WSRT_Measures.ztar
             ```
-    - `libs`
-        - These are the packaged library files needed by carta-backend from the packaging computer.
-- `src-tauri/frontend/`
-    - This contains the built frontend files.
-- `src-tauri/capabilities/` & `src-tauri/gen/`
-    - These are generated by Tauri. We should not modify them.
-- `src-tauri/icons/`
-    - These are the icons generated using `cargo tauri icon <path-to-icon>.png`. We should not modify them.
-- `src-tauri/src`
-    - `lib.rs`
-        - This is the source code for CARTA Tauri app.
-    - `main.rs`
-        - This is the main Rust file for Tauri. We should not modify it.
-- `src-tauri/target/`
-    - This contains the built files. Can be cleaned using `cargo clean`.
+    - `libs/`: Shared libraries required by the `carta-backend`.
+- `src-tauri/frontend/`: Compiled frontend assets.
+- `src-tauri/capabilities/` & `src-tauri/gen/`: Internal Tauri files (do not modify).
+- `src-tauri/icons/`: Application icons (generated via `cargo tauri icon`).
+- `src-tauri/src/`:
+    - `lib.rs`: Core Rust logic for the CARTA Tauri application.
+    - `main.rs`: Application entry point.
+- `src-tauri/target/`: Build artifacts. Use `cargo clean` to remove.
