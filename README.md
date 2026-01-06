@@ -107,9 +107,14 @@ bash scripts/macOS/copy_frontend.sh <path-to-frontend-build-folder>
 1. Update versioning:
     - `src-tauri/tauri.conf.json`: Update the `version` field.
     - `src-tauri/Cargo.toml`: Update `version` and `description`. (Note: Do not modify the Rust `edition`).
-2. Configure packaging script:
+2. (Optional) Test the application.
+    - `cd src-tauri`
+    - `cargo clean`
+    - `cargo tauri dev`
+    - After testing, run `cd ..` to return to the root directory.
+3. Configure packaging script:
     - `scripts/macOS/package.sh`: Set `APPLE_ID` and `APPLE_PASSWORD` (use an app-specific password).
-3. Execute build:
+4. Execute build:
     - Run `bash scripts/macOS/package.sh`.
     - Provide the login password when prompted to unlock the keychain.
 
@@ -183,6 +188,8 @@ The installer will be generated in `src-tauri/target/release/bundle/nsis`.
 cd src-tauri
 # Clean previous build artifacts
 cargo clean
+# (Optional) Test the application
+cargo tauri dev
 # Generate Windows installer
 cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
 ```
@@ -263,6 +270,8 @@ cd src-tauri
 cargo clean
 # Set library path
 export LD_LIBRARY_PATH="$(pwd)/backend/libs"
+# (Optional) Test the application
+cargo tauri dev
 # Generate AppImage
 cargo tauri build --bundles appimage
 ```
