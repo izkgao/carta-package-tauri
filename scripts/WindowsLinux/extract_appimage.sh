@@ -128,4 +128,5 @@ cp -R "$EXTRACT_DIR/share/carta/frontend/"* "$PROJECT_ROOT/src-tauri/frontend/."
 # Delete extracted files
 echo "Cleaning up..."
 rm -rf "$EXTRACT_WORKDIR"
+rm -rf "$PROJECT_ROOT/.tmp"
 echo "Done!"
