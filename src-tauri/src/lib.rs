@@ -180,11 +180,57 @@ fn resolve_base_directory(input_path: Option<&str>) -> AppResult<PathBuf> {
         } else {
             Err("Requested path is neither a file nor a directory".into())
         }
-    } else if cfg!(any(target_os = "macos", target_os = "linux")) && cwd == Path::new("/") {
+    } else if should_default_to_home(&cwd) {
         home_dir().ok_or_else(|| "HOME directory not found".into())
     } else {
         Ok(cwd)
     }
+}
+
+fn should_default_to_home(cwd: &Path) -> bool {
+    if cwd == Path::new("/") {
+        return true;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // When launched from Finder, macOS apps may start in the app bundle's executable directory.
+        if cwd.to_string_lossy().contains(".app/Contents/MacOS") {
+            return true;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if is_linux_appimage_mount_dir(cwd) {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn is_linux_appimage_mount_dir(cwd: &Path) -> bool {
+    if !cwd.starts_with("/tmp") {
+        return false;
+    }
+
+    let cwd_str = cwd.to_string_lossy();
+    if cwd_str.contains("/.mount_") {
+        return true;
+    }
+
+    let has_appimage_env =
+        std::env::var_os("APPIMAGE").is_some() || std::env::var_os("APPDIR").is_some();
+    if !has_appimage_env {
+        return false;
+    }
+
+    matches!(
+        cwd.file_name(),
+        Some(name) if name == std::ffi::OsStr::new("usr")
+    )
 }
 
 fn home_dir() -> Option<PathBuf> {
