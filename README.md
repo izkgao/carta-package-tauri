@@ -319,9 +319,10 @@ The AppImage will be generated in `src-tauri/target/release/bundle/appimage`.
             ```
     - `libs/`: Shared libraries required by the `carta-backend`.
 - `src-tauri/frontend/`: Compiled frontend assets.
-- `src-tauri/capabilities/` & `src-tauri/gen/`: Internal Tauri files (do not modify).
+- `src-tauri/capabilities/`: Internal Tauri files (do not modify).
+- `src-tauri/gen/`: Internal Tauri files, generated during build and not included in version control (do not modify).
 - `src-tauri/icons/`: Application icons (generated via `cargo tauri icon`).
 - `src-tauri/src/`:
     - `lib.rs`: Core Rust logic for the CARTA Tauri application.
     - `main.rs`: Application entry point.
-- `src-tauri/target/`: Build artifacts. Use `cargo clean` to remove.
+- `src-tauri/target/`: Build artifacts, generated during build and not included in version control. Use `cargo clean` to remove.
