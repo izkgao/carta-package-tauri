@@ -3,12 +3,29 @@
 This repository contains build instructions and helper scripts for packaging the CARTA desktop application using Tauri.
 
 ## Contents
+- [Troubleshooting](#troubleshooting)
 - [macOS](#macos)
 - [Windows](#windows)
     - [Build Windows installer on Windows](#windows)
     - [Build Windows installer on Linux](#build-windows-installer-on-linux)
+    - [Build Windows installer on macOS](#build-windows-installer-on-macos)
 - [Linux](#linux)
 - [Project Structure](#project-structure)
+
+## Troubleshooting
+
+### macOS: Rust toolchain selection
+
+If `cargo tauri build` fails on macOS due to picking up the wrong Rust toolchain (e.g. Homebrew Rust instead of rustup), ensure the intended `cargo` is first in `PATH`, then verify the active binaries:
+
+```bash
+# Check the current Rust toolchain
+which cargo rustc rustup
+
+# Add the rustup toolchain to the PATH or put in at the bottom of your .zshrc
+export PATH="$HOME/.cargo/bin:$PATH"
+which cargo rustc rustup
+```
 
 ## macOS
 
@@ -114,6 +131,7 @@ bash scripts/macOS/copy_frontend.sh <path-to-frontend-build-folder>
     - After testing, run `cd ..` to return to the root directory.
 3. Configure packaging script:
     - `scripts/macOS/package.sh`: Set `APPLE_ID` and `APPLE_PASSWORD` (use an app-specific password).
+    - If `cargo tauri build` fails due to a toolchain conflict, see [macOS: Rust toolchain selection](#macos-rust-toolchain-selection).
 4. Execute build:
     - Run `bash scripts/macOS/package.sh`.
     - Provide the login password when prompted to unlock the keychain.
@@ -231,6 +249,7 @@ cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
 ```
 The installer will be generated in `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis`.
 
+> If `cargo tauri build` fails due to a toolchain conflict, see [macOS: Rust toolchain selection](#macos-rust-toolchain-selection).
 
 ## Linux
 ### Prerequisites
