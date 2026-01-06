@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "resources": [
+      "backend/bin/carta_backend",
+      "backend/etc/**/*",
+      "frontend/**/*"
+    ]
+  }
+}
