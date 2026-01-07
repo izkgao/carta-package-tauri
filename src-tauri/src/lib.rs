@@ -54,6 +54,8 @@ struct CliArgs {
     inspect: bool,
     help: bool,
     version: bool,
+    port: Option<u16>,
+    port_error: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -121,6 +123,21 @@ where
     let mut result = CliArgs::default();
     let mut iter = args.into_iter().peekable();
 
+    fn parse_port(value: &str, result: &mut CliArgs) -> bool {
+        match value.parse::<u16>() {
+            Ok(port) => {
+                result.port = Some(port);
+                true
+            }
+            Err(_) => {
+                result
+                    .port_error
+                    .replace(format!("Invalid port number: {}", value));
+                false
+            }
+        }
+    }
+
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--" => {
@@ -136,6 +153,30 @@ where
             "--inspect" => result.inspect = true,
             "--help" | "-h" => result.help = true,
             "--version" | "-v" => result.version = true,
+            "--port" | "-p" => {
+                let Some(value) = iter.next() else {
+                    result.port_error = Some("Missing value for --port".to_string());
+                    break;
+                };
+                if !parse_port(&value, &mut result) {
+                    break;
+                }
+            }
+            s if s.starts_with("--port=") => {
+                let value = s.trim_start_matches("--port=");
+                if !parse_port(value, &mut result) {
+                    break;
+                }
+            }
+            s if s.starts_with("-p=") => {
+                let value = s.trim_start_matches("-p=");
+                if !parse_port(value, &mut result) {
+                    break;
+                }
+            }
+            // macOS LaunchServices argument when started from Finder.
+            // Forwarding it to the backend breaks option parsing.
+            s if s.starts_with("-psn_") => {}
             s if s.starts_with('-') => {
                 result.extra_args.push(arg.clone());
                 if !s.contains('=')
@@ -860,6 +901,10 @@ fn shutdown_backend(state: &AppState) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let cli = parse_cli_args();
+    if let Some(message) = cli.port_error.as_deref() {
+        eprintln!("Error: {}", message);
+        std::process::exit(1);
+    }
     let base_dir = match resolve_base_directory(cli.input_path.as_deref()) {
         Ok(path) => path,
         Err(message) => {
@@ -868,12 +913,15 @@ pub fn run() {
         }
     };
 
-    let backend_port = match portpicker::pick_unused_port() {
+    let backend_port = match cli.port {
         Some(port) => port,
-        None => {
-            eprintln!("Error: No free port available.");
-            std::process::exit(1);
-        }
+        None => match portpicker::pick_unused_port() {
+            Some(port) => port,
+            None => {
+                eprintln!("Error: No free port available.");
+                std::process::exit(1);
+            }
+        },
     };
     let backend_token = uuid::Uuid::new_v4().to_string();
     let window_url = format!("http://localhost:{}/?token={}", backend_port, backend_token);
@@ -967,6 +1015,32 @@ mod tests {
         let parsed = parse_args(&["file1", "file2", "file3"]);
         assert_eq!(parsed.input_path.as_deref(), Some("file1"));
         assert_eq!(parsed.extra_args, vec!["file2", "file3"]);
+    }
+
+    #[test]
+    fn parse_cli_args_parses_port_with_value() {
+        let parsed = parse_args(&["--port", "3003"]);
+        assert_eq!(parsed.port, Some(3003));
+        assert!(parsed.extra_args.is_empty());
+        assert!(parsed.port_error.is_none());
+    }
+
+    #[test]
+    fn parse_cli_args_parses_port_with_equals() {
+        let parsed = parse_args(&["--port=3003"]);
+        assert_eq!(parsed.port, Some(3003));
+        assert!(parsed.extra_args.is_empty());
+        assert!(parsed.port_error.is_none());
+    }
+
+    #[test]
+    fn parse_cli_args_reports_invalid_port() {
+        let parsed = parse_args(&["--port", "not-a-number"]);
+        assert!(parsed.port.is_none());
+        assert_eq!(
+            parsed.port_error.as_deref(),
+            Some("Invalid port number: not-a-number")
+        );
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
