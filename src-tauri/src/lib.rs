@@ -536,6 +536,7 @@ fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
 
     if !version {
+        println!();
         println!("Additional Tauri flag:");
         println!("      --inspect      Open the DevTools in the Tauri window.");
     }
