@@ -116,6 +116,131 @@ struct AppState {
     inspect: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OptionValueKind {
+    None,
+    Required,
+}
+
+const BACKEND_LONG_OPTIONS: &[(&str, OptionValueKind)] = &[
+    ("--help", OptionValueKind::None),
+    ("--version", OptionValueKind::None),
+    ("--verbosity", OptionValueKind::Required),
+    ("--no_log", OptionValueKind::None),
+    ("--log_performance", OptionValueKind::None),
+    ("--log_protocol_messages", OptionValueKind::None),
+    ("--no_frontend", OptionValueKind::None),
+    ("--no_database", OptionValueKind::None),
+    ("--http_url_prefix", OptionValueKind::Required),
+    ("--no_browser", OptionValueKind::None),
+    ("--browser", OptionValueKind::Required),
+    ("--host", OptionValueKind::Required),
+    ("--port", OptionValueKind::Required),
+    ("--omp_threads", OptionValueKind::Required),
+    ("--top_level_folder", OptionValueKind::Required),
+    ("--frontend_folder", OptionValueKind::Required),
+    ("--exit_timeout", OptionValueKind::Required),
+    ("--initial_timeout", OptionValueKind::Required),
+    ("--idle_timeout", OptionValueKind::Required),
+    ("--read_only_mode", OptionValueKind::None),
+    ("--enable_scripting", OptionValueKind::None),
+    ("--no_user_config", OptionValueKind::None),
+    ("--no_system_config", OptionValueKind::None),
+    ("--debug_no_auth", OptionValueKind::None),
+    ("--no_runtime_config", OptionValueKind::None),
+    ("--controller_deployment", OptionValueKind::None),
+    ("--threads", OptionValueKind::Required),
+    ("--base", OptionValueKind::Required),
+    ("--root", OptionValueKind::Required),
+    ("--no_http", OptionValueKind::None),
+];
+
+const BACKEND_SHORT_OPTIONS: &[(&str, OptionValueKind)] = &[
+    ("-h", OptionValueKind::None),
+    ("-v", OptionValueKind::None),
+    ("-p", OptionValueKind::Required),
+    ("-t", OptionValueKind::Required),
+];
+
+fn backend_option_kind(option: &str) -> Option<OptionValueKind> {
+    if option.starts_with("--") {
+        return BACKEND_LONG_OPTIONS
+            .iter()
+            .find(|(name, _)| *name == option)
+            .map(|(_, kind)| *kind);
+    }
+    if option.starts_with('-') {
+        return BACKEND_SHORT_OPTIONS
+            .iter()
+            .find(|(name, _)| *name == option)
+            .map(|(_, kind)| *kind);
+    }
+    None
+}
+
+fn unknown_backend_option_message(option: &str) -> String {
+    let mut message = format!("Unsupported backend option: {}", option);
+    if option.starts_with("--") {
+        let candidates: Vec<&str> = BACKEND_LONG_OPTIONS
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|known| known.starts_with(option))
+            .collect();
+        if candidates.len() == 1 {
+            message.push_str(&format!("\nDid you mean {}?", candidates[0]));
+        }
+    }
+    message.push_str("\nRun with --help to see supported options.");
+    message
+}
+
+fn validate_backend_args(args: &[String]) -> AppResult<()> {
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = &args[i];
+
+        if arg == "--" {
+            break;
+        }
+
+        if arg.starts_with("--") || (arg.starts_with('-') && arg != "-") {
+            let (name, has_inline_value) = arg
+                .split_once('=')
+                .map(|(n, _)| (n, true))
+                .unwrap_or((arg.as_str(), false));
+
+            let Some(kind) = backend_option_kind(name) else {
+                return Err(AppError(unknown_backend_option_message(name)));
+            };
+
+            if has_inline_value && kind == OptionValueKind::None {
+                return Err(AppError(format!(
+                    "Backend option {} does not take a value",
+                    name
+                )));
+            }
+
+            if kind == OptionValueKind::Required && !has_inline_value {
+                let Some(value) = args.get(i + 1) else {
+                    return Err(AppError(format!("Backend option {} requires a value", name)));
+                };
+                if value.starts_with('-') {
+                    return Err(AppError(format!("Backend option {} requires a value", name)));
+                }
+                i += 2;
+                continue;
+            }
+
+            i += 1;
+            continue;
+        }
+
+        // Positional argument.
+        i += 1;
+    }
+    Ok(())
+}
+
 fn parse_cli_args_from<I>(args: I) -> CliArgs
 where
     I: IntoIterator<Item = String>,
@@ -512,34 +637,79 @@ fn run_backend_help(_app: &AppHandle, _version: bool) -> AppResult<()> {
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
-    let backend_path = resolve_backend_path(app)?;
     let flag = if version { "--version" } else { "--help" };
+
+    let backend_path = resolve_backend_path(app)?;
 
     let output = {
         #[cfg(target_os = "windows")]
         {
-            let backend_win = backend_path.to_string_lossy();
-            let script = format!(
-                "set -e\nbackend_win={}\nbackend=$(wslpath -a -u \"$backend_win\")\nexec \"$backend\" {}\n",
-                bash_escape(&backend_win),
-                bash_escape(flag)
+            let backend = win_to_wsl_path(&backend_path.to_string_lossy())
+                .ok_or_else(|| AppError::from("Failed to convert backend path to WSL format"))?;
+            let libs_path = backend_path
+                .parent()
+                .map(|bin| bin.join("..").join("libs"))
+                .filter(|p| p.exists())
+                .and_then(|p| win_to_wsl_path(&p.to_string_lossy()));
+            let ld_export = libs_path
+                .map(|p| format!("export LD_LIBRARY_PATH={}:$LD_LIBRARY_PATH; ", bash_escape(&p)))
+                .unwrap_or_default();
+            let command = format!(
+                "{ld_export}exec {backend} {flag}",
+                ld_export = ld_export,
+                backend = bash_escape(&backend),
+                flag = bash_escape(flag)
             );
-            wsl_bash_output(&script)?
+            let mut cmd = wsl_bash_command(&command);
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd.output()
+                .map_err(|err| AppError(format!("Failed to run wsl.exe bash command: {}", err)))?
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            Command::new(backend_path).arg(flag).output()?
+            let mut cmd = Command::new(&backend_path);
+            cmd.arg(flag);
+
+            #[cfg(target_os = "linux")]
+            {
+                let libs_dir = backend_path
+                    .parent()
+                    .map(|bin| bin.join("..").join("libs"))
+                    .filter(|p| p.exists());
+                if let Some(libs_dir) = libs_dir {
+                    let mut ld_library_path = libs_dir.to_string_lossy().into_owned();
+                    if let Ok(existing) = std::env::var("LD_LIBRARY_PATH")
+                        && !existing.trim().is_empty()
+                    {
+                        ld_library_path.push(':');
+                        ld_library_path.push_str(existing.trim());
+                    }
+                    cmd.env("LD_LIBRARY_PATH", ld_library_path);
+                }
+            }
+
+            cmd.output()?
         }
     };
 
     print!("{}", String::from_utf8_lossy(&output.stdout));
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
 
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError(format!(
+            "carta_backend {} failed: {}",
+            flag,
+            stderr.trim()
+        )));
+    }
+
     if !version {
         println!();
         println!("Additional Tauri flag:");
         println!("      --inspect      Open the DevTools in the Tauri window.");
     }
+
     Ok(())
 }
 
@@ -584,8 +754,7 @@ fn spawn_backend(
             .parent()
             .map(|bin| bin.join("..").join("libs"))
             .filter(|p| p.exists())
-            .and_then(|p| win_to_wsl_path(&p.to_string_lossy()))
-            .unwrap_or_default();
+            .and_then(|p| win_to_wsl_path(&p.to_string_lossy()));
         let extra = extra_args
             .iter()
             .map(|arg| bash_escape(arg))
@@ -598,11 +767,14 @@ fn spawn_backend(
         let frontend_escaped = bash_escape(&frontend);
         let base_escaped = bash_escape(&base);
         let auth_token_escaped = bash_escape(auth_token);
-        let libs_escaped = bash_escape(&libs_path);
         let casa_path_escaped = bash_escape(&casa_path);
 
+        let ld_export = libs_path
+            .map(|p| format!("export LD_LIBRARY_PATH={}:$LD_LIBRARY_PATH; ", bash_escape(&p)))
+            .unwrap_or_default();
+
         let command = format!(
-            "export LD_LIBRARY_PATH={libs_escaped}:$LD_LIBRARY_PATH; export {ENV_AUTH_TOKEN}={auth_token_escaped}; export {ENV_CASAPATH}={casa_path_escaped}; exec {backend_escaped} {base_escaped} --port={port} --frontend_folder={frontend_escaped} --no_browser {extra}"
+            "{ld_export}export {ENV_AUTH_TOKEN}={auth_token_escaped}; export {ENV_CASAPATH}={casa_path_escaped}; exec {backend_escaped} {base_escaped} --port={port} --frontend_folder={frontend_escaped} --no_browser {extra}"
         );
 
         let mut cmd = wsl_bash_command(&command);
@@ -947,19 +1119,37 @@ pub fn run() {
         })
         .setup(move |app| {
             if cli.help || cli.version {
-                if let Err(err) = run_backend_help(app.handle(), cli.version) {
-                    eprintln!("{}", err);
+                match run_backend_help(app.handle(), cli.version) {
+                    Ok(()) => std::process::exit(0),
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        std::process::exit(1);
+                    }
                 }
-                std::process::exit(0);
             }
 
             let state = app.state::<AppState>();
-            spawn_backend(app.handle(), &state, &base_dir, &extra_args)?;
-            if let Err(err) = wait_for_backend(&state, Duration::from_secs(BACKEND_TIMEOUT_SECS)) {
+            let result: AppResult<()> = (|| {
+                validate_backend_args(&extra_args)?;
+
+                spawn_backend(app.handle(), &state, &base_dir, &extra_args)?;
+                if let Err(err) =
+                    wait_for_backend(&state, Duration::from_secs(BACKEND_TIMEOUT_SECS))
+                {
+                    shutdown_backend(&state);
+                    return Err(err);
+                }
+
+                create_window(app.handle(), &state, MAIN_WINDOW_LABEL.to_string())
+                    .map_err(|err| AppError(err.to_string()))?;
+                Ok(())
+            })();
+
+            if let Err(err) = result {
+                eprintln!("{}", err);
                 shutdown_backend(&state);
-                return Err(err.into());
+                std::process::exit(1);
             }
-            create_window(app.handle(), &state, MAIN_WINDOW_LABEL.to_string())?;
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -977,8 +1167,15 @@ pub fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application");
+        .build(tauri::generate_context!());
+
+    let app = match app {
+        Ok(app) => app,
+        Err(err) => {
+            eprintln!("{}", err);
+            std::process::exit(1);
+        }
+    };
 
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { .. } = event {
@@ -1042,6 +1239,39 @@ mod tests {
             parsed.port_error.as_deref(),
             Some("Invalid port number: not-a-number")
         );
+    }
+
+    #[test]
+    fn backend_validation_rejects_unknown_option_with_suggestion() {
+        let err = validate_backend_args(&vec!["--log_protocol".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("Unsupported backend option: --log_protocol"));
+        assert!(err
+            .to_string()
+            .contains("Did you mean --log_protocol_messages?"));
+    }
+
+    #[test]
+    fn backend_validation_consumes_required_values() {
+        assert!(
+            validate_backend_args(&vec!["--verbosity".to_string(), "5".to_string()]).is_ok()
+        );
+        assert!(
+            validate_backend_args(&vec!["--http_url_prefix".to_string(), "/x".to_string()]).is_ok()
+        );
+        assert!(validate_backend_args(&vec!["-p".to_string(), "3003".to_string()]).is_ok());
+        assert!(validate_backend_args(&vec!["--port=3003".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn backend_validation_errors_on_missing_value() {
+        let err = validate_backend_args(&vec!["--verbosity".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("requires a value"));
+    }
+
+    #[test]
+    fn backend_validation_errors_on_value_for_flag() {
+        let err = validate_backend_args(&vec!["--no_log=1".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("does not take a value"));
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
