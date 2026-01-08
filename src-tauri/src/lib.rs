@@ -476,37 +476,40 @@ fn bash_escape(value: &str) -> String {
     escaped
 }
 
-fn resolve_backend_path(app: &AppHandle) -> AppResult<PathBuf> {
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let candidate = resource_dir
-            .join(BACKEND_DIR)
-            .join("bin")
-            .join(BACKEND_FILENAME);
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    Err("backend/bin/carta_backend binary not found".into())
+fn resolve_resource_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().resource_dir().ok()
 }
 
-fn resolve_frontend_path(app: &AppHandle) -> AppResult<PathBuf> {
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let candidate = resource_dir.join(FRONTEND_DIR);
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    Err("frontend directory not found".into())
+fn resolve_backend_path(resource_dir: &Path) -> AppResult<PathBuf> {
+    let candidate = resource_dir
+        .join(BACKEND_DIR)
+        .join("bin")
+        .join(BACKEND_FILENAME);
+    candidate
+        .exists()
+        .then_some(candidate)
+        .ok_or_else(|| AppError::from("backend/bin/carta_backend binary not found"))
 }
 
-fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
-    let etc_path = backend_path
-        .parent()
-        .map(|bin| bin.join("..").join("etc"))
-        .filter(|p| p.exists())
-        .ok_or(AppError::from("backend/etc directory not found"))?;
+fn resolve_frontend_path(resource_dir: &Path) -> AppResult<PathBuf> {
+    let candidate = resource_dir.join(FRONTEND_DIR);
+    candidate
+        .exists()
+        .then_some(candidate)
+        .ok_or_else(|| AppError::from("frontend directory not found"))
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn resolve_libs_path(resource_dir: &Path) -> Option<PathBuf> {
+    let candidate = resource_dir.join(BACKEND_DIR).join("libs");
+    candidate.exists().then_some(candidate)
+}
+
+fn resolve_etc_path(resource_dir: &Path) -> AppResult<String> {
+    let etc_path = resource_dir.join(BACKEND_DIR).join("etc");
+    if !etc_path.exists() {
+        return Err(AppError::from("backend/etc directory not found"));
+    }
 
     let resolved = fs::canonicalize(&etc_path).unwrap_or(etc_path);
 
@@ -623,8 +626,8 @@ fn resolve_etc_path(backend_path: &Path) -> AppResult<String> {
     }
 }
 
-fn resolve_casa_path(backend_path: &Path) -> AppResult<String> {
-    let etc_path = resolve_etc_path(backend_path)?;
+fn resolve_casa_path(resource_dir: &Path) -> AppResult<String> {
+    let etc_path = resolve_etc_path(resource_dir)?;
     // The "../../../../../" prefix clears the hardcoded absolute path from the build machine
     // embedded in carta_backend, allowing us to specify the correct etc directory path.
     Ok(format!("../../../../../{} linux", etc_path))
@@ -639,18 +642,17 @@ fn run_backend_help(_app: &AppHandle, _version: bool) -> AppResult<()> {
 fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
     let flag = if version { "--version" } else { "--help" };
 
-    let backend_path = resolve_backend_path(app)?;
+    let resource_dir = resolve_resource_dir(app)
+        .ok_or_else(|| AppError::from("resource directory not found"))?;
+    let backend_path = resolve_backend_path(&resource_dir)?;
 
     let output = {
         #[cfg(target_os = "windows")]
         {
             let backend = win_to_wsl_path(&backend_path.to_string_lossy())
                 .ok_or_else(|| AppError::from("Failed to convert backend path to WSL format"))?;
-            let libs_path = backend_path
-                .parent()
-                .map(|bin| bin.join("..").join("libs"))
-                .filter(|p| p.exists())
-                .and_then(|p| win_to_wsl_path(&p.to_string_lossy()));
+            let libs_path =
+                resolve_libs_path(&resource_dir).and_then(|p| win_to_wsl_path(&p.to_string_lossy()));
             let ld_export = libs_path
                 .map(|p| format!("export LD_LIBRARY_PATH={}:$LD_LIBRARY_PATH; ", bash_escape(&p)))
                 .unwrap_or_default();
@@ -672,11 +674,7 @@ fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
 
             #[cfg(target_os = "linux")]
             {
-                let libs_dir = backend_path
-                    .parent()
-                    .map(|bin| bin.join("..").join("libs"))
-                    .filter(|p| p.exists());
-                if let Some(libs_dir) = libs_dir {
+                if let Some(libs_dir) = resolve_libs_path(&resource_dir) {
                     let mut ld_library_path = libs_dir.to_string_lossy().into_owned();
                     if let Ok(existing) = std::env::var("LD_LIBRARY_PATH")
                         && !existing.trim().is_empty()
@@ -735,10 +733,13 @@ fn spawn_backend(
     base_dir: &Path,
     extra_args: &[String],
 ) -> AppResult<()> {
+    let resource_dir = resolve_resource_dir(app)
+        .ok_or_else(|| AppError::from("resource directory not found"))?;
+
     #[cfg(target_os = "windows")]
     {
-        let backend_path = resolve_backend_path(app)?;
-        let frontend_path = resolve_frontend_path(app)?;
+        let backend_path = resolve_backend_path(&resource_dir)?;
+        let frontend_path = resolve_frontend_path(&resource_dir)?;
 
         // Convert Windows paths to WSL paths directly in Rust
         let backend = win_to_wsl_path(&backend_path.to_string_lossy())
@@ -747,14 +748,11 @@ fn spawn_backend(
             .ok_or_else(|| AppError::from("Failed to convert frontend path to WSL format"))?;
         let base = win_to_wsl_path(&base_dir.to_string_lossy())
             .ok_or_else(|| AppError::from("Failed to convert base path to WSL format"))?;
-        let casa_path = resolve_casa_path(&backend_path)?;
+        let casa_path = resolve_casa_path(&resource_dir)?;
 
         // Libs directory for LD_LIBRARY_PATH
-        let libs_path = backend_path
-            .parent()
-            .map(|bin| bin.join("..").join("libs"))
-            .filter(|p| p.exists())
-            .and_then(|p| win_to_wsl_path(&p.to_string_lossy()));
+        let libs_path =
+            resolve_libs_path(&resource_dir).and_then(|p| win_to_wsl_path(&p.to_string_lossy()));
         let extra = extra_args
             .iter()
             .map(|arg| bash_escape(arg))
@@ -796,8 +794,8 @@ fn spawn_backend(
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        let backend_path = resolve_backend_path(app)?;
-        let frontend_path = resolve_frontend_path(app)?;
+        let backend_path = resolve_backend_path(&resource_dir)?;
+        let frontend_path = resolve_frontend_path(&resource_dir)?;
 
         let mut cmd = Command::new(&backend_path);
         cmd.arg(base_dir)
@@ -809,16 +807,12 @@ fn spawn_backend(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let casa_path = resolve_casa_path(&backend_path)?;
+        let casa_path = resolve_casa_path(&resource_dir)?;
         cmd.env(ENV_CASAPATH, casa_path);
 
         #[cfg(target_os = "linux")]
         {
-            let libs_dir = backend_path
-                .parent()
-                .map(|bin| bin.join("..").join("libs"))
-                .filter(|p| p.exists());
-            if let Some(libs_dir) = libs_dir {
+            if let Some(libs_dir) = resolve_libs_path(&resource_dir) {
                 let mut ld_library_path = libs_dir.to_string_lossy().into_owned();
                 if let Ok(existing) = std::env::var("LD_LIBRARY_PATH")
                     && !existing.trim().is_empty()
@@ -1308,7 +1302,7 @@ mod tests {
             Err(_) => cleanup_link = true,
         }
 
-        let casa_path = resolve_casa_path(&backend_path).unwrap();
+        let casa_path = resolve_casa_path(&base_dir).unwrap();
         let parts: Vec<_> = casa_path.split(' ').collect();
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[1], "linux");
@@ -1370,7 +1364,7 @@ elif [ -e \"$link\" ]; then echo __NONLINK__; else echo __MISSING__; fi\n",
             }
         }
 
-        let casa_path = resolve_casa_path(&backend_path).unwrap();
+        let casa_path = resolve_casa_path(&base_dir).unwrap();
         let parts: Vec<_> = casa_path.split(' ').collect();
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[1], "linux");
