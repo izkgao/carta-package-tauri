@@ -15,6 +15,17 @@
         "type": "skip"
       }
     },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "deb": {
+        "desktopTemplate": "carta.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "carta.desktop"
+      }
+    },
     "active": true,
     "resources": [
       "backend/bin/carta_backend",

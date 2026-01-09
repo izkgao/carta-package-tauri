@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name={{{name}}}
+Comment={{{comment}}}
+Categories={{{categories}}}
+Terminal=false
+Icon={{{icon}}}
+Exec={{{exec}}} %U
+MimeType=application/fits;image/fits;application/x-hdf5;inode/directory;
