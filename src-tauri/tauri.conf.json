@@ -28,6 +28,28 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "description": "FITS image",
+        "ext": ["fits", "fits.gz", "fit", "fit.gz", "fts", "fts.gz", "fz"]
+      },
+      {
+        "description": "CASA image",
+        "ext": ["image", "casa"]
+      },
+      {
+        "description": "IDIA HDF5 image",
+        "ext": ["hdf5", "h5"]
+      },
+      {
+        "description": "MIRIAD image",
+        "ext": ["miriad"]
+      },
+      {
+        "description": "XRADIO Zarr image",
+        "ext": ["zarr"]
+      }
     ]
   }
 }
