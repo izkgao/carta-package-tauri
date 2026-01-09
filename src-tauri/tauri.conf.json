@@ -20,10 +20,10 @@
         "bundleMediaFramework": false
       },
       "deb": {
-        "desktopTemplate": "carta.desktop"
+        "desktopTemplate": "templates/carta.desktop"
       },
       "rpm": {
-        "desktopTemplate": "carta.desktop"
+        "desktopTemplate": "templates/carta.desktop"
       }
     },
     "active": true,
