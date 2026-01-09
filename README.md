@@ -292,7 +292,9 @@ export LD_LIBRARY_PATH="$(pwd)/backend/libs:$LD_LIBRARY_PATH"
 # (Optional) Test the application
 cargo tauri dev
 # Generate AppImage
-cargo tauri build --bundles appimage
+cargo tauri build --bundles appimage --config tauri.appimage.conf.json
+# Generate deb and rpm packages
+cargo tauri build --bundles deb rpm
 ```
 The AppImage will be generated in `src-tauri/target/release/bundle/appimage`.
 
