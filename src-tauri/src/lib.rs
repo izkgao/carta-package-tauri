@@ -457,6 +457,42 @@ fn resolve_top_level_path(value: &str) -> AppResult<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
+fn wsl_path_is_within(base: &str, top: &str) -> bool {
+    let base = base.trim_end_matches('/');
+    let top = top.trim_end_matches('/');
+    if base == top {
+        return true;
+    }
+    base.starts_with(top) && base.as_bytes().get(top.len()) == Some(&b'/')
+}
+
+#[cfg(target_os = "windows")]
+fn is_path_within_top_level(base: &Path, top_level: &Path) -> bool {
+    let base_str = base.to_string_lossy();
+    let top_str = top_level.to_string_lossy();
+    let Ok(base_wsl) = to_wsl_path_str(&base_str) else {
+        return false;
+    };
+    let Ok(top_wsl) = to_wsl_path_str(&top_str) else {
+        return false;
+    };
+    wsl_path_is_within(&base_wsl, &top_wsl)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_path_within_top_level(base: &Path, top_level: &Path) -> bool {
+    base.strip_prefix(top_level).is_ok()
+}
+
+fn ensure_base_dir_within_top_level(base_dir: PathBuf, top_level: &Path) -> PathBuf {
+    if is_path_within_top_level(&base_dir, top_level) {
+        base_dir
+    } else {
+        top_level.to_path_buf()
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn build_window_url(base_url: &str, input_file: Option<&Path>, top_level: &Path) -> String {
     build_window_url_windows(base_url, input_file, top_level)
 }
@@ -1340,7 +1376,7 @@ pub fn run() {
         eprintln!("Error: {}", message);
         std::process::exit(1);
     }
-    let base_dir = match resolve_base_directory(cli.input_path.as_deref()) {
+    let mut base_dir = match resolve_base_directory(cli.input_path.as_deref()) {
         Ok(path) => path,
         Err(message) => {
             eprintln!("{}", message);
@@ -1376,6 +1412,7 @@ pub fn run() {
             std::process::exit(1);
         }
     };
+    base_dir = ensure_base_dir_within_top_level(base_dir, &top_level_path);
     let initial_window_url =
         build_window_url(&window_url, input_file_path.as_deref(), &top_level_path);
 
@@ -1682,6 +1719,16 @@ if [ \"$target\" = \"$expected\" ]; then rm -f \"$link\"; fi; fi\n",
         assert_eq!(wsl_parent_path("/home"), "/");
         assert_eq!(wsl_parent_path("/home/user"), "/home");
         assert_eq!(wsl_parent_path("/home/user/dir/"), "/home/user");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn wsl_path_is_within_checks_prefix_boundaries() {
+        assert!(wsl_path_is_within("/mnt/c/Users", "/mnt/c"));
+        assert!(wsl_path_is_within("/mnt/c/Users/Me", "/mnt/c/Users"));
+        assert!(wsl_path_is_within("/mnt/c/Users", "/"));
+        assert!(!wsl_path_is_within("/mnt/c/Users", "/mnt/d"));
+        assert!(!wsl_path_is_within("/mnt/c/Users", "/mnt/c/User"));
     }
 
     #[cfg(target_os = "windows")]
