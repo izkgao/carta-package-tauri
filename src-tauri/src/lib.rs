@@ -456,36 +456,36 @@ fn resolve_top_level_path(value: &str) -> AppResult<PathBuf> {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn build_window_url(base_url: &str, input_file: Option<&Path>, top_level: &Path) -> String {
-    #[cfg(target_os = "windows")]
-    {
-        return build_window_url_windows(base_url, input_file, top_level);
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let Some(input_file) = input_file else {
-            return base_url.to_string();
-        };
+    build_window_url_windows(base_url, input_file, top_level)
+}
 
-        let Ok(relative) = input_file.strip_prefix(top_level) else {
-            return base_url.to_string();
-        };
-        let file_path = url_path_from_fs(relative);
-        if file_path.is_empty() {
-            base_url.to_string()
-        } else {
-            format!("{base_url}&file={file_path}")
-        }
+#[cfg(not(target_os = "windows"))]
+fn build_window_url(base_url: &str, input_file: Option<&Path>, top_level: &Path) -> String {
+    let Some(input_file) = input_file else {
+        return base_url.to_string();
+    };
+
+    let Ok(relative) = input_file.strip_prefix(top_level) else {
+        return base_url.to_string();
+    };
+    let file_path = url_path_from_fs(relative);
+    if file_path.is_empty() {
+        base_url.to_string()
+    } else {
+        format!("{base_url}&file={file_path}")
     }
 }
 
+#[cfg(target_os = "windows")]
 fn url_path_from_fs(path: &Path) -> String {
-    let path_str = path.to_string_lossy();
-    #[cfg(target_os = "windows")]
-    {
-        return path_str.replace('\\', "/");
-    }
-    path_str.into_owned()
+    path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn url_path_from_fs(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 fn should_default_to_home(cwd: &Path) -> bool {
@@ -581,9 +581,8 @@ fn wsl_parent_path(path: &str) -> String {
     let mut parts = trimmed.rsplitn(2, '/');
     let _ = parts.next();
     match parts.next() {
-        Some(parent) if parent.is_empty() => "/".to_string(),
+        Some("") | None => "/".to_string(),
         Some(parent) => parent.to_string(),
-        None => "/".to_string(),
     }
 }
 
@@ -625,7 +624,7 @@ fn wsl_bash_command(command: &str) -> Command {
     cmd
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", test))]
 fn wsl_bash_output(command: &str) -> AppResult<std::process::Output> {
     let output = wsl_bash_command(command)
         .output()
