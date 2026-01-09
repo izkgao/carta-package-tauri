@@ -222,10 +222,16 @@ fn validate_backend_args(args: &[String]) -> AppResult<()> {
 
             if kind == OptionValueKind::Required && !has_inline_value {
                 let Some(value) = args.get(i + 1) else {
-                    return Err(AppError(format!("Backend option {} requires a value", name)));
+                    return Err(AppError(format!(
+                        "Backend option {} requires a value",
+                        name
+                    )));
                 };
                 if value.starts_with('-') {
-                    return Err(AppError(format!("Backend option {} requires a value", name)));
+                    return Err(AppError(format!(
+                        "Backend option {} requires a value",
+                        name
+                    )));
                 }
                 i += 2;
                 continue;
@@ -328,6 +334,20 @@ fn resolve_base_directory(input_path: Option<&str>) -> AppResult<PathBuf> {
     let cwd = std::env::current_dir()?;
 
     if let Some(path) = input_path {
+        #[cfg(target_os = "windows")]
+        {
+            if is_wsl_path_str(path) {
+                if wsl_test_path(path, "-f")? {
+                    let parent = PathBuf::from(wsl_parent_path(path));
+                    return Ok(parent);
+                }
+                if wsl_test_path(path, "-d")? {
+                    return Ok(PathBuf::from(path));
+                }
+                return Err("Requested file or directory does not exist".into());
+            }
+        }
+
         let candidate = if Path::new(path).is_absolute() {
             PathBuf::from(path)
         } else {
@@ -337,10 +357,7 @@ fn resolve_base_directory(input_path: Option<&str>) -> AppResult<PathBuf> {
             .map_err(|_| AppError::from("Requested file or directory does not exist"))?;
 
         if metadata.is_file() {
-            Ok(candidate
-                .parent()
-                .unwrap_or_else(|| Path::new("/"))
-                .to_path_buf())
+            Ok(candidate.parent().unwrap_or(&candidate).to_path_buf())
         } else if metadata.is_dir() {
             Ok(candidate)
         } else {
@@ -351,6 +368,124 @@ fn resolve_base_directory(input_path: Option<&str>) -> AppResult<PathBuf> {
     } else {
         Ok(cwd)
     }
+}
+
+fn resolve_input_file_path(input_path: Option<&str>) -> AppResult<Option<PathBuf>> {
+    let Some(path) = input_path else {
+        return Ok(None);
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        if is_wsl_path_str(path) {
+            if wsl_test_path(path, "-f")? {
+                return Ok(Some(PathBuf::from(path)));
+            }
+            if wsl_test_path(path, "-d")? && is_image_directory(Path::new(path)) {
+                return Ok(Some(PathBuf::from(path)));
+            }
+            return Ok(None);
+        }
+    }
+
+    let cwd = std::env::current_dir()?;
+    let candidate = if Path::new(path).is_absolute() {
+        PathBuf::from(path)
+    } else {
+        cwd.join(path)
+    };
+    let metadata = fs::metadata(&candidate)
+        .map_err(|_| AppError::from("Requested file or directory does not exist"))?;
+
+    if metadata.is_file() || (metadata.is_dir() && is_image_directory(&candidate)) {
+        Ok(Some(candidate))
+    } else {
+        Ok(None)
+    }
+}
+
+// Keep in sync with file associations in src-tauri/tauri.conf.json.
+fn is_image_directory(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            ext.eq_ignore_ascii_case("image")
+                || ext.eq_ignore_ascii_case("casa")
+                || ext.eq_ignore_ascii_case("miriad")
+                || ext.eq_ignore_ascii_case("zarr")
+        })
+        .unwrap_or(false)
+}
+
+fn resolve_top_level_folder(extra_args: &[String]) -> Option<String> {
+    let mut iter = extra_args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--top_level_folder" {
+            if let Some(value) = iter.next()
+                && !value.is_empty()
+            {
+                return Some(value.clone());
+            }
+        } else if let Some(value) = arg.strip_prefix("--top_level_folder=")
+            && !value.is_empty()
+        {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn resolve_top_level_path(value: &str) -> AppResult<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    if value.is_empty() {
+        return Ok(PathBuf::from("/"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if is_wsl_path_str(value) {
+            return Ok(PathBuf::from(value));
+        }
+    }
+
+    let path = Path::new(value);
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(cwd.join(path))
+    }
+}
+
+fn build_window_url(base_url: &str, input_file: Option<&Path>, top_level: &Path) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        return build_window_url_windows(base_url, input_file, top_level);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let Some(input_file) = input_file else {
+            return base_url.to_string();
+        };
+
+        let Ok(relative) = input_file.strip_prefix(top_level) else {
+            return base_url.to_string();
+        };
+        let file_path = url_path_from_fs(relative);
+        if file_path.is_empty() {
+            base_url.to_string()
+        } else {
+            format!("{base_url}&file={file_path}")
+        }
+    }
+}
+
+fn url_path_from_fs(path: &Path) -> String {
+    let path_str = path.to_string_lossy();
+    #[cfg(target_os = "windows")]
+    {
+        return path_str.replace('\\', "/");
+    }
+    path_str.into_owned()
 }
 
 fn should_default_to_home(cwd: &Path) -> bool {
@@ -424,6 +559,50 @@ fn win_to_wsl_path(win_path: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
+fn is_wsl_path_str(path: &str) -> bool {
+    path.starts_with('/')
+}
+
+#[cfg(target_os = "windows")]
+fn to_wsl_path_str(path: &str) -> AppResult<String> {
+    if is_wsl_path_str(path) {
+        Ok(path.to_string())
+    } else {
+        win_to_wsl_path(path).ok_or_else(|| AppError::from("Failed to convert path to WSL format"))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_parent_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "/" {
+        return "/".to_string();
+    }
+    let mut parts = trimmed.rsplitn(2, '/');
+    let _ = parts.next();
+    match parts.next() {
+        Some(parent) if parent.is_empty() => "/".to_string(),
+        Some(parent) => parent.to_string(),
+        None => "/".to_string(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_wsl_arg_path(value: &str) -> AppResult<String> {
+    if is_wsl_path_str(value) {
+        return Ok(value.to_string());
+    }
+    let cwd = std::env::current_dir()?;
+    let path = Path::new(value);
+    let abs_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    to_wsl_path_str(&abs_path.to_string_lossy())
+}
+
+#[cfg(target_os = "windows")]
 fn wsl_distro() -> Option<String> {
     std::env::var(ENV_WSL_DISTRO)
         .ok()
@@ -474,6 +653,80 @@ fn bash_escape(value: &str) -> String {
     }
     escaped.push('\'');
     escaped
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_test_path(path: &str, flag: &str) -> AppResult<bool> {
+    let command = format!("test {} {}", flag, bash_escape(path));
+    let output = wsl_bash_command(&command)
+        .output()
+        .map_err(|err| AppError(format!("Failed to run wsl.exe bash command: {}", err)))?;
+    Ok(output.status.success())
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_backend_args_for_wsl(extra_args: &[String]) -> AppResult<Vec<String>> {
+    let mut normalized = Vec::with_capacity(extra_args.len());
+    let mut iter = extra_args.iter().peekable();
+
+    while let Some(arg) = iter.next() {
+        if arg == "--top_level_folder" || arg == "--frontend_folder" {
+            if let Some(value) = iter.next() {
+                let converted = normalize_wsl_arg_path(value)?;
+                normalized.push(arg.clone());
+                normalized.push(converted);
+            } else {
+                normalized.push(arg.clone());
+            }
+            continue;
+        }
+
+        if let Some(value) = arg.strip_prefix("--top_level_folder=") {
+            let converted = normalize_wsl_arg_path(value)?;
+            normalized.push(format!("--top_level_folder={}", converted));
+            continue;
+        }
+
+        if let Some(value) = arg.strip_prefix("--frontend_folder=") {
+            let converted = normalize_wsl_arg_path(value)?;
+            normalized.push(format!("--frontend_folder={}", converted));
+            continue;
+        }
+
+        normalized.push(arg.clone());
+    }
+
+    Ok(normalized)
+}
+
+#[cfg(target_os = "windows")]
+fn build_window_url_windows(base_url: &str, input_file: Option<&Path>, top_level: &Path) -> String {
+    let Some(input_file) = input_file else {
+        return base_url.to_string();
+    };
+
+    let input_str = input_file.to_string_lossy();
+    let top_str = top_level.to_string_lossy();
+    let input_wsl = match to_wsl_path_str(&input_str) {
+        Ok(value) => value,
+        Err(_) => return base_url.to_string(),
+    };
+    let top_wsl = match to_wsl_path_str(&top_str) {
+        Ok(value) => value,
+        Err(_) => return base_url.to_string(),
+    };
+
+    let input_path = Path::new(&input_wsl);
+    let top_path = Path::new(&top_wsl);
+    let Ok(relative) = input_path.strip_prefix(top_path) else {
+        return base_url.to_string();
+    };
+    let file_path = url_path_from_fs(relative);
+    if file_path.is_empty() {
+        base_url.to_string()
+    } else {
+        format!("{base_url}&file={file_path}")
+    }
 }
 
 fn resolve_resource_dir(app: &AppHandle) -> Option<PathBuf> {
@@ -642,8 +895,8 @@ fn run_backend_help(_app: &AppHandle, _version: bool) -> AppResult<()> {
 fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
     let flag = if version { "--version" } else { "--help" };
 
-    let resource_dir = resolve_resource_dir(app)
-        .ok_or_else(|| AppError::from("resource directory not found"))?;
+    let resource_dir =
+        resolve_resource_dir(app).ok_or_else(|| AppError::from("resource directory not found"))?;
     let backend_path = resolve_backend_path(&resource_dir)?;
 
     let output = {
@@ -651,10 +904,15 @@ fn run_backend_help(app: &AppHandle, version: bool) -> AppResult<()> {
         {
             let backend = win_to_wsl_path(&backend_path.to_string_lossy())
                 .ok_or_else(|| AppError::from("Failed to convert backend path to WSL format"))?;
-            let libs_path =
-                resolve_libs_path(&resource_dir).and_then(|p| win_to_wsl_path(&p.to_string_lossy()));
+            let libs_path = resolve_libs_path(&resource_dir)
+                .and_then(|p| win_to_wsl_path(&p.to_string_lossy()));
             let ld_export = libs_path
-                .map(|p| format!("export LD_LIBRARY_PATH={}:$LD_LIBRARY_PATH; ", bash_escape(&p)))
+                .map(|p| {
+                    format!(
+                        "export LD_LIBRARY_PATH={}:$LD_LIBRARY_PATH; ",
+                        bash_escape(&p)
+                    )
+                })
                 .unwrap_or_default();
             let command = format!(
                 "{ld_export}exec {backend} {flag}",
@@ -733,8 +991,8 @@ fn spawn_backend(
     base_dir: &Path,
     extra_args: &[String],
 ) -> AppResult<()> {
-    let resource_dir = resolve_resource_dir(app)
-        .ok_or_else(|| AppError::from("resource directory not found"))?;
+    let resource_dir =
+        resolve_resource_dir(app).ok_or_else(|| AppError::from("resource directory not found"))?;
 
     #[cfg(target_os = "windows")]
     {
@@ -742,18 +1000,16 @@ fn spawn_backend(
         let frontend_path = resolve_frontend_path(&resource_dir)?;
 
         // Convert Windows paths to WSL paths directly in Rust
-        let backend = win_to_wsl_path(&backend_path.to_string_lossy())
-            .ok_or_else(|| AppError::from("Failed to convert backend path to WSL format"))?;
-        let frontend = win_to_wsl_path(&frontend_path.to_string_lossy())
-            .ok_or_else(|| AppError::from("Failed to convert frontend path to WSL format"))?;
-        let base = win_to_wsl_path(&base_dir.to_string_lossy())
-            .ok_or_else(|| AppError::from("Failed to convert base path to WSL format"))?;
+        let backend = to_wsl_path_str(&backend_path.to_string_lossy())?;
+        let frontend = to_wsl_path_str(&frontend_path.to_string_lossy())?;
+        let base = to_wsl_path_str(&base_dir.to_string_lossy())?;
         let casa_path = resolve_casa_path(&resource_dir)?;
+        let normalized_extra_args = normalize_backend_args_for_wsl(extra_args)?;
 
         // Libs directory for LD_LIBRARY_PATH
         let libs_path =
             resolve_libs_path(&resource_dir).and_then(|p| win_to_wsl_path(&p.to_string_lossy()));
-        let extra = extra_args
+        let extra = normalized_extra_args
             .iter()
             .map(|arg| bash_escape(arg))
             .collect::<Vec<_>>()
@@ -768,7 +1024,12 @@ fn spawn_backend(
         let casa_path_escaped = bash_escape(&casa_path);
 
         let ld_export = libs_path
-            .map(|p| format!("export LD_LIBRARY_PATH={}:$LD_LIBRARY_PATH; ", bash_escape(&p)))
+            .map(|p| {
+                format!(
+                    "export LD_LIBRARY_PATH={}:$LD_LIBRARY_PATH; ",
+                    bash_escape(&p)
+                )
+            })
             .unwrap_or_default();
 
         let command = format!(
@@ -984,13 +1245,13 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         .item(&toggle_devtools)
         .separator();
 
-    #[cfg(any(target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     let app_menu = {
         let quit = MenuItem::with_id(app, MENU_QUIT, "Quit CARTA", true, Some("Ctrl+Q"))?;
         app_menu_builder.item(&quit).build()?
     };
 
-    #[cfg(not(any(target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     let app_menu = app_menu_builder.quit().build()?;
 
     MenuBuilder::new(app)
@@ -1012,9 +1273,17 @@ fn toggle_fullscreen(window: &WebviewWindow) {
     let _ = window.set_fullscreen(next_state);
 }
 
-fn create_window(app: &AppHandle, state: &AppState, label: String) -> tauri::Result<WebviewWindow> {
+fn create_window(
+    app: &AppHandle,
+    state: &AppState,
+    label: String,
+    window_url: Option<&str>,
+) -> tauri::Result<WebviewWindow> {
     let bounds = next_window_bounds(app);
-    let url = WebviewUrl::App(state.window_url.clone().into());
+    let url = window_url
+        .map(ToString::to_string)
+        .unwrap_or_else(|| state.window_url.clone());
+    let url = WebviewUrl::App(url.into());
     let menu = build_menu(app)?;
     let window = WebviewWindowBuilder::new(app, label, url)
         .title(WINDOW_TITLE)
@@ -1032,19 +1301,19 @@ fn create_window(app: &AppHandle, state: &AppState, label: String) -> tauri::Res
 fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::MenuEvent) {
     match event.id().as_ref() {
         MENU_NEW_WINDOW => {
-            let _ = create_window(app, state, new_window_label());
+            let _ = create_window(app, state, new_window_label(), None);
         }
         MENU_TOGGLE_DEVTOOLS => {
-            if let Some(window) = focused_window(app)
-                .or_else(|| app.webview_windows().values().next().cloned())
+            if let Some(window) =
+                focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
             {
                 let _ = window.set_focus();
                 toggle_devtools(&window);
             }
         }
         MENU_TOGGLE_FULLSCREEN => {
-            if let Some(window) = focused_window(app)
-                .or_else(|| app.webview_windows().values().next().cloned())
+            if let Some(window) =
+                focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
             {
                 let _ = window.set_focus();
                 toggle_fullscreen(&window);
@@ -1079,6 +1348,13 @@ pub fn run() {
             std::process::exit(1);
         }
     };
+    let input_file_path = match resolve_input_file_path(cli.input_path.as_deref()) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("{}", message);
+            std::process::exit(1);
+        }
+    };
 
     let backend_port = match cli.port {
         Some(port) => port,
@@ -1092,6 +1368,17 @@ pub fn run() {
     };
     let backend_token = uuid::Uuid::new_v4().to_string();
     let window_url = format!("http://localhost:{}/?token={}", backend_port, backend_token);
+    let top_level_folder =
+        resolve_top_level_folder(&cli.extra_args).unwrap_or_else(|| "/".to_string());
+    let top_level_path = match resolve_top_level_path(&top_level_folder) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("{}", message);
+            std::process::exit(1);
+        }
+    };
+    let initial_window_url =
+        build_window_url(&window_url, input_file_path.as_deref(), &top_level_path);
 
     let state = AppState {
         backend: Mutex::new(None),
@@ -1102,6 +1389,7 @@ pub fn run() {
     };
 
     let extra_args = cli.extra_args.clone();
+    let initial_window_url = initial_window_url.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state)
@@ -1134,8 +1422,13 @@ pub fn run() {
                     return Err(err);
                 }
 
-                create_window(app.handle(), &state, MAIN_WINDOW_LABEL.to_string())
-                    .map_err(|err| AppError(err.to_string()))?;
+                create_window(
+                    app.handle(),
+                    &state,
+                    MAIN_WINDOW_LABEL.to_string(),
+                    Some(&initial_window_url),
+                )
+                .map_err(|err| AppError(err.to_string()))?;
                 Ok(())
             })();
 
@@ -1146,20 +1439,18 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            match event {
-                WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-                    save_window_bounds(window.app_handle(), window);
-                }
-                WindowEvent::CloseRequested { .. } => {
-                    let app = window.app_handle();
-                    save_window_bounds(app, window);
-                    if app.webview_windows().len() <= 1 {
-                        app.exit(0);
-                    }
-                }
-                _ => {}
+        .on_window_event(|window, event| match event {
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                save_window_bounds(window.app_handle(), window);
             }
+            WindowEvent::CloseRequested { .. } => {
+                let app = window.app_handle();
+                save_window_bounds(app, window);
+                if app.webview_windows().len() <= 1 {
+                    app.exit(0);
+                }
+            }
+            _ => {}
         })
         .build(tauri::generate_context!());
 
@@ -1238,17 +1529,19 @@ mod tests {
     #[test]
     fn backend_validation_rejects_unknown_option_with_suggestion() {
         let err = validate_backend_args(&vec!["--log_protocol".to_string()]).unwrap_err();
-        assert!(err.to_string().contains("Unsupported backend option: --log_protocol"));
-        assert!(err
-            .to_string()
-            .contains("Did you mean --log_protocol_messages?"));
+        assert!(
+            err.to_string()
+                .contains("Unsupported backend option: --log_protocol")
+        );
+        assert!(
+            err.to_string()
+                .contains("Did you mean --log_protocol_messages?")
+        );
     }
 
     #[test]
     fn backend_validation_consumes_required_values() {
-        assert!(
-            validate_backend_args(&vec!["--verbosity".to_string(), "5".to_string()]).is_ok()
-        );
+        assert!(validate_backend_args(&vec!["--verbosity".to_string(), "5".to_string()]).is_ok());
         assert!(
             validate_backend_args(&vec!["--http_url_prefix".to_string(), "/x".to_string()]).is_ok()
         );
@@ -1381,5 +1674,76 @@ if [ \"$target\" = \"$expected\" ]; then rm -f \"$link\"; fi; fi\n",
             let _ = wsl_bash_output(&cleanup);
         }
         let _ = fs::remove_dir_all(&base_dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn wsl_parent_path_handles_root_and_nested() {
+        assert_eq!(wsl_parent_path("/"), "/");
+        assert_eq!(wsl_parent_path("/home"), "/");
+        assert_eq!(wsl_parent_path("/home/user"), "/home");
+        assert_eq!(wsl_parent_path("/home/user/dir/"), "/home/user");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn normalize_backend_args_converts_wsl_relevant_flags() {
+        let cwd = std::env::current_dir().unwrap();
+        let expected_top = win_to_wsl_path(&cwd.join("data").to_string_lossy()).unwrap();
+        let expected_frontend = win_to_wsl_path(&cwd.join("dist").to_string_lossy()).unwrap();
+        let args = vec![
+            "--top_level_folder".to_string(),
+            "data".to_string(),
+            "--frontend_folder=dist".to_string(),
+            "--other".to_string(),
+        ];
+        let normalized = normalize_backend_args_for_wsl(&args).unwrap();
+        assert_eq!(
+            normalized,
+            vec![
+                "--top_level_folder".to_string(),
+                expected_top,
+                format!("--frontend_folder={}", expected_frontend),
+                "--other".to_string(),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn normalize_backend_args_converts_absolute_paths() {
+        let args = vec![
+            "--top_level_folder".to_string(),
+            r"C:\data".to_string(),
+            "--frontend_folder=C:\\frontend".to_string(),
+            "--other".to_string(),
+        ];
+        let normalized = normalize_backend_args_for_wsl(&args).unwrap();
+        assert_eq!(
+            normalized,
+            vec![
+                "--top_level_folder".to_string(),
+                "/mnt/c/data".to_string(),
+                "--frontend_folder=/mnt/c/frontend".to_string(),
+                "--other".to_string(),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn build_window_url_windows_requires_top_level_prefix() {
+        let base_url = "http://localhost:3000/?token=abc";
+        let input = Path::new(r"C:\data\images\file.fits");
+        let top_level = Path::new(r"C:\data");
+        let url = build_window_url_windows(base_url, Some(input), top_level);
+        assert_eq!(
+            url,
+            "http://localhost:3000/?token=abc&file=images/file.fits"
+        );
+
+        let outside_top = Path::new(r"C:\other\file.fits");
+        let url = build_window_url_windows(base_url, Some(outside_top), top_level);
+        assert_eq!(url, base_url);
     }
 }
