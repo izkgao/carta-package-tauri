@@ -288,7 +288,7 @@ cd src-tauri
 # Clean previous build artifacts
 cargo clean
 # Set library path
-export LD_LIBRARY_PATH="$(pwd)/backend/libs"
+export LD_LIBRARY_PATH="$(pwd)/backend/libs:$LD_LIBRARY_PATH"
 # (Optional) Test the application
 cargo tauri dev
 # Generate AppImage
