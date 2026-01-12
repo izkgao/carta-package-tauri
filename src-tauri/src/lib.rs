@@ -63,15 +63,23 @@ struct WindowBounds {
     height: u32,
     x: i32,
     y: i32,
+    #[serde(default)]
+    devtools_open: bool,
 }
 
 impl WindowBounds {
-    fn new(pos: PhysicalPosition<i32>, size: PhysicalSize<u32>, scale: f64) -> Self {
+    fn new(
+        pos: PhysicalPosition<i32>,
+        size: PhysicalSize<u32>,
+        scale: f64,
+        devtools_open: bool,
+    ) -> Self {
         Self {
             width: (size.width as f64 / scale) as u32,
             height: (size.height as f64 / scale) as u32,
             x: (pos.x as f64 / scale) as i32,
             y: (pos.y as f64 / scale) as i32,
+            devtools_open,
         }
     }
 
@@ -1231,13 +1239,17 @@ fn save_window_bounds(app: &AppHandle, window: &Window) {
     };
     let (Ok(pos), Ok(size), Ok(scale)) = (
         window.outer_position(),
-        window.inner_size(),
+        window.outer_size(),
         window.scale_factor(),
     ) else {
         return;
     };
 
-    let bounds = WindowBounds::new(pos, size, scale);
+    let devtools_open = app
+        .get_webview_window(window.label())
+        .map(|w| w.is_devtools_open())
+        .unwrap_or(false);
+    let bounds = WindowBounds::new(pos, size, scale, devtools_open);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -1258,9 +1270,11 @@ fn next_window_bounds(app: &AppHandle) -> WindowBounds {
         .or_else(|| app.webview_windows().values().next().cloned())
         .and_then(|w| {
             let pos = w.outer_position().ok()?;
-            let size = w.inner_size().ok()?;
+            let size = w.outer_size().ok()?;
             let scale = w.scale_factor().ok()?;
-            let bounds = WindowBounds::new(pos, size, scale).with_offset(WINDOW_OFFSET);
+            let devtools_open = w.is_devtools_open();
+            let bounds =
+                WindowBounds::new(pos, size, scale, devtools_open).with_offset(WINDOW_OFFSET);
             let monitor = w
                 .current_monitor()
                 .ok()
@@ -1275,6 +1289,7 @@ fn next_window_bounds(app: &AppHandle) -> WindowBounds {
                 height: DEFAULT_WINDOW_HEIGHT,
                 x: 0,
                 y: 0,
+                devtools_open: false,
             },
             None,
         ));
@@ -1372,6 +1387,7 @@ fn toggle_devtools(window: &WebviewWindow) {
     } else {
         window.open_devtools();
     }
+    save_window_bounds(window.app_handle(), &window.as_ref().window());
 }
 
 fn toggle_fullscreen(window: &WebviewWindow) {
@@ -1395,9 +1411,13 @@ fn create_window(
     let window = WebviewWindowBuilder::new(app, label, url)
         .title(WINDOW_TITLE)
         .menu(menu)
-        .inner_size(bounds.width as f64, bounds.height as f64)
         .position(bounds.x as f64, bounds.y as f64)
         .build()?;
+
+    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+        bounds.width as f64,
+        bounds.height as f64,
+    )));
 
     {
         let mut labels = state.window_order.lock().unwrap();
@@ -1405,7 +1425,7 @@ fn create_window(
             labels.push(label_for_state);
         }
     }
-    if state.inspect {
+    if state.inspect || bounds.devtools_open {
         window.open_devtools();
     }
     Ok(window)
