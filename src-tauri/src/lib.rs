@@ -1254,25 +1254,59 @@ fn focused_window(app: &AppHandle) -> Option<WebviewWindow> {
 }
 
 fn next_window_bounds(app: &AppHandle) -> WindowBounds {
-    focused_window(app)
+    let (mut bounds, monitor) = focused_window(app)
         .or_else(|| app.webview_windows().values().next().cloned())
         .and_then(|w| {
             let pos = w.outer_position().ok()?;
             let size = w.inner_size().ok()?;
             let scale = w.scale_factor().ok()?;
-            Some(WindowBounds::new(pos, size, scale).with_offset(WINDOW_OFFSET))
+            let bounds = WindowBounds::new(pos, size, scale).with_offset(WINDOW_OFFSET);
+            let monitor = w
+                .current_monitor()
+                .ok()
+                .flatten()
+                .or_else(|| w.primary_monitor().ok().flatten());
+            Some((bounds, monitor))
         })
-        .or_else(|| load_window_bounds(app))
-        .unwrap_or(WindowBounds {
-            width: DEFAULT_WINDOW_WIDTH,
-            height: DEFAULT_WINDOW_HEIGHT,
-            x: 0,
-            y: 0,
-        })
+        .or_else(|| load_window_bounds(app).map(|bounds| (bounds, None)))
+        .unwrap_or((
+            WindowBounds {
+                width: DEFAULT_WINDOW_WIDTH,
+                height: DEFAULT_WINDOW_HEIGHT,
+                x: 0,
+                y: 0,
+            },
+            None,
+        ));
+
+    let monitor = monitor.or_else(|| app.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        bounds = wrap_window_bounds(bounds, &monitor);
+    }
+    bounds
 }
 
 fn new_window_label() -> String {
     format!("carta-{}", uuid::Uuid::new_v4())
+}
+
+fn wrap_window_bounds(mut bounds: WindowBounds, monitor: &tauri::window::Monitor) -> WindowBounds {
+    let work_area = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let work_x = (work_area.position.x as f64 / scale) as i32;
+    let work_y = (work_area.position.y as f64 / scale) as i32;
+    let work_width = (work_area.size.width as f64 / scale) as u32;
+    let work_height = (work_area.size.height as f64 / scale) as u32;
+
+    let max_x = work_x + work_width as i32;
+    let max_y = work_y + work_height as i32;
+    let exceeds_x = bounds.x + bounds.width as i32 > max_x;
+    let exceeds_y = bounds.y + bounds.height as i32 > max_y;
+    if bounds.x < work_x || bounds.y < work_y || exceeds_x || exceeds_y {
+        bounds.x = work_x;
+        bounds.y = work_y;
+    }
+    bounds
 }
 
 fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
