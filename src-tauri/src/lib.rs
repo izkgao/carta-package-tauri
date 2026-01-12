@@ -25,7 +25,6 @@ const DEFAULT_WINDOW_HEIGHT: u32 = 1080;
 const WINDOW_OFFSET: i32 = 25;
 const WINDOW_STATE_FILE: &str = "window-state.json";
 const WINDOW_TITLE: &str = "CARTA";
-const MAIN_WINDOW_LABEL: &str = "main";
 
 const BACKEND_DIR: &str = "backend";
 const FRONTEND_DIR: &str = "frontend";
@@ -113,7 +112,9 @@ struct AppState {
     backend_port: u16,
     backend_token: String,
     window_url: String,
+    top_level_path: PathBuf,
     inspect: bool,
+    window_order: Mutex<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -492,36 +493,102 @@ fn ensure_base_dir_within_top_level(base_dir: PathBuf, top_level: &Path) -> Path
     }
 }
 
-#[cfg(target_os = "windows")]
-fn build_window_url(base_url: &str, input_file: Option<&Path>, top_level: &Path) -> String {
-    build_window_url_windows(base_url, input_file, top_level)
+#[cfg(target_os = "macos")]
+fn window_has_file(window: &WebviewWindow) -> bool {
+    window
+        .url()
+        .ok()
+        .map(|url| {
+            url.query_pairs()
+                .any(|(key, _)| key == "file" || key == "files")
+        })
+        .unwrap_or(false)
 }
 
-#[cfg(not(target_os = "windows"))]
-fn build_window_url(base_url: &str, input_file: Option<&Path>, top_level: &Path) -> String {
-    let Some(input_file) = input_file else {
-        return base_url.to_string();
-    };
+#[cfg(target_os = "macos")]
+fn handle_opened_urls(app: &AppHandle, state: &AppState, urls: Vec<tauri::Url>) {
+    // Collect valid file paths from URLs.
+    let input_files: Vec<PathBuf> = urls
+        .into_iter()
+        .filter_map(|url| {
+            if url.scheme() != "file" {
+                return None;
+            }
+            let path = url.to_file_path().ok()?;
+            let input_file = resolve_input_file_path(Some(&path.to_string_lossy())).ok()??;
+            Some(input_file)
+        })
+        .collect();
 
-    let Ok(relative) = input_file.strip_prefix(top_level) else {
-        return base_url.to_string();
+    let Some(window_url) = build_window_url(&state.window_url, &input_files, &state.top_level_path)
+    else {
+        return;
     };
-    let file_path = url_path_from_fs(relative);
-    if file_path.is_empty() {
-        base_url.to_string()
-    } else {
-        format!("{base_url}&file={file_path}")
+    let Ok(target_url) = tauri::Url::parse(&window_url) else {
+        return;
+    };
+    let windows = app.webview_windows();
+    if let Some(window) = windows
+        .values()
+        .find(|w| w.url().ok().as_ref() == Some(&target_url))
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    let window_order = state.window_order.lock().unwrap().clone();
+    if let Some(window) = window_order
+        .iter()
+        .find_map(|label| windows.get(label).filter(|window| !window_has_file(window)))
+        .or_else(|| windows.values().find(|w| !window_has_file(w)))
+        && window.navigate(target_url).is_ok()
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let _ = create_window(app, state, new_window_label(), Some(&window_url));
+}
+
+fn build_window_url(base_url: &str, input_files: &[PathBuf], top_level: &Path) -> Option<String> {
+    let files: Vec<_> = input_files
+        .iter()
+        .filter_map(|f| relative_url_path(f, top_level))
+        .collect();
+
+    match files.as_slice() {
+        [] => None,
+        [file] => Some(format!("{base_url}&file={file}")),
+        _ => Some(format!("{base_url}&files={}", files.join(","))),
     }
 }
 
-#[cfg(target_os = "windows")]
-fn url_path_from_fs(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+fn relative_url_path(input_file: &Path, top_level: &Path) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    let relative = {
+        let input_wsl = to_wsl_path_str(&input_file.to_string_lossy()).ok()?;
+        let top_wsl = to_wsl_path_str(&top_level.to_string_lossy()).ok()?;
+        PathBuf::from(input_wsl)
+            .strip_prefix(&top_wsl)
+            .ok()?
+            .to_path_buf()
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let relative = input_file.strip_prefix(top_level).ok()?;
+
+    let file_path = url_path_from_fs(relative);
+    (!file_path.is_empty()).then_some(file_path)
 }
 
-#[cfg(not(target_os = "windows"))]
 fn url_path_from_fs(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+    let raw = path.to_string_lossy();
+    #[cfg(target_os = "windows")]
+    return raw.replace('\\', "/");
+
+    #[cfg(not(target_os = "windows"))]
+    return raw.into_owned();
 }
 
 fn should_default_to_home(cwd: &Path) -> bool {
@@ -732,36 +799,6 @@ fn normalize_backend_args_for_wsl(extra_args: &[String]) -> AppResult<Vec<String
     }
 
     Ok(normalized)
-}
-
-#[cfg(target_os = "windows")]
-fn build_window_url_windows(base_url: &str, input_file: Option<&Path>, top_level: &Path) -> String {
-    let Some(input_file) = input_file else {
-        return base_url.to_string();
-    };
-
-    let input_str = input_file.to_string_lossy();
-    let top_str = top_level.to_string_lossy();
-    let input_wsl = match to_wsl_path_str(&input_str) {
-        Ok(value) => value,
-        Err(_) => return base_url.to_string(),
-    };
-    let top_wsl = match to_wsl_path_str(&top_str) {
-        Ok(value) => value,
-        Err(_) => return base_url.to_string(),
-    };
-
-    let input_path = Path::new(&input_wsl);
-    let top_path = Path::new(&top_wsl);
-    let Ok(relative) = input_path.strip_prefix(top_path) else {
-        return base_url.to_string();
-    };
-    let file_path = url_path_from_fs(relative);
-    if file_path.is_empty() {
-        base_url.to_string()
-    } else {
-        format!("{base_url}&file={file_path}")
-    }
 }
 
 fn resolve_resource_dir(app: &AppHandle) -> Option<PathBuf> {
@@ -1315,6 +1352,7 @@ fn create_window(
     window_url: Option<&str>,
 ) -> tauri::Result<WebviewWindow> {
     let bounds = next_window_bounds(app);
+    let label_for_state = label.clone();
     let url = window_url
         .map(ToString::to_string)
         .unwrap_or_else(|| state.window_url.clone());
@@ -1327,6 +1365,12 @@ fn create_window(
         .position(bounds.x as f64, bounds.y as f64)
         .build()?;
 
+    {
+        let mut labels = state.window_order.lock().unwrap();
+        if !labels.iter().any(|item| item == &label_for_state) {
+            labels.push(label_for_state);
+        }
+    }
     if state.inspect {
         window.open_devtools();
     }
@@ -1360,6 +1404,10 @@ fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::Menu
         }
         _ => {}
     }
+}
+
+fn remove_window_label(state: &AppState, label: &str) {
+    state.window_order.lock().unwrap().retain(|l| l != label);
 }
 
 fn shutdown_backend(state: &AppState) {
@@ -1413,19 +1461,21 @@ pub fn run() {
         }
     };
     base_dir = ensure_base_dir_within_top_level(base_dir, &top_level_path);
-    let initial_window_url =
-        build_window_url(&window_url, input_file_path.as_deref(), &top_level_path);
+    let input_files: &[PathBuf] = input_file_path.as_slice();
+    let initial_window_url = build_window_url(&window_url, input_files, &top_level_path)
+        .unwrap_or_else(|| window_url.clone());
 
     let state = AppState {
         backend: Mutex::new(None),
         backend_port,
         backend_token,
         window_url,
+        top_level_path: top_level_path.clone(),
         inspect: cli.inspect,
+        window_order: Mutex::new(Vec::new()),
     };
 
     let extra_args = cli.extra_args.clone();
-    let initial_window_url = initial_window_url.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state)
@@ -1458,13 +1508,16 @@ pub fn run() {
                     return Err(err);
                 }
 
-                create_window(
-                    app.handle(),
-                    &state,
-                    MAIN_WINDOW_LABEL.to_string(),
-                    Some(&initial_window_url),
-                )
-                .map_err(|err| AppError(err.to_string()))?;
+                #[cfg(not(target_os = "macos"))]
+                {
+                    create_window(
+                        app.handle(),
+                        &state,
+                        new_window_label(),
+                        Some(&initial_window_url),
+                    )
+                    .map_err(|err| AppError(err.to_string()))?;
+                }
                 Ok(())
             })();
 
@@ -1481,6 +1534,8 @@ pub fn run() {
             }
             WindowEvent::CloseRequested { .. } => {
                 let app = window.app_handle();
+                let state = app.state::<AppState>();
+                remove_window_label(&state, window.label());
                 save_window_bounds(app, window);
                 if app.webview_windows().len() <= 1 {
                     app.exit(0);
@@ -1498,11 +1553,29 @@ pub fn run() {
         }
     };
 
-    app.run(|app_handle, event| {
-        if let RunEvent::ExitRequested { .. } = event {
+    app.run(move |app_handle, event| match event {
+        RunEvent::ExitRequested { .. } => {
             let state = app_handle.state::<AppState>();
             shutdown_backend(&state);
         }
+        #[cfg(target_os = "macos")]
+        RunEvent::Ready => {
+            let state = app_handle.state::<AppState>();
+            if app_handle.webview_windows().is_empty() {
+                let _ = create_window(
+                    app_handle,
+                    &state,
+                    new_window_label(),
+                    Some(&initial_window_url),
+                );
+            }
+        }
+        #[cfg(target_os = "macos")]
+        RunEvent::Opened { urls } => {
+            let state = app_handle.state::<AppState>();
+            handle_opened_urls(app_handle, &state, urls);
+        }
+        _ => {}
     });
 }
 
@@ -1782,14 +1855,14 @@ if [ \"$target\" = \"$expected\" ]; then rm -f \"$link\"; fi; fi\n",
         let base_url = "http://localhost:3000/?token=abc";
         let input = Path::new(r"C:\data\images\file.fits");
         let top_level = Path::new(r"C:\data");
-        let url = build_window_url_windows(base_url, Some(input), top_level);
+        let url = build_window_url(base_url, &[input.to_path_buf()], top_level);
         assert_eq!(
-            url,
-            "http://localhost:3000/?token=abc&file=images/file.fits"
+            url.as_deref(),
+            Some("http://localhost:3000/?token=abc&file=images/file.fits")
         );
 
         let outside_top = Path::new(r"C:\other\file.fits");
-        let url = build_window_url_windows(base_url, Some(outside_top), top_level);
-        assert_eq!(url, base_url);
+        let url = build_window_url(base_url, &[outside_top.to_path_buf()], top_level);
+        assert!(url.is_none());
     }
 }
