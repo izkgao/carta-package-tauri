@@ -10,6 +10,9 @@ use std::{
 };
 
 #[cfg(target_os = "windows")]
+use std::{sync::Arc, thread};
+
+#[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -115,6 +118,13 @@ impl From<io::Error> for AppError {
 
 type AppResult<T> = Result<T, AppError>;
 
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct PendingFiles {
+    files: Vec<PathBuf>,
+    timer_active: bool,
+}
+
 struct AppState {
     backend: Mutex<Option<Child>>,
     backend_port: u16,
@@ -123,6 +133,8 @@ struct AppState {
     inspect: bool,
     window_order: Mutex<Vec<String>>,
     top_level_path: PathBuf,
+    #[cfg(target_os = "windows")]
+    pending_files: Arc<Mutex<PendingFiles>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -558,6 +570,39 @@ fn handle_opened_files(app: &AppHandle, state: &AppState, input_files: &[PathBuf
     let _ = create_window(app, state, new_window_label(), Some(&window_url));
 }
 
+#[cfg(target_os = "windows")]
+fn queue_files_for_batch_open(app: &AppHandle, state: &AppState, input_files: Vec<PathBuf>) {
+    const BATCH_DELAY_MS: u64 = 150;
+
+    let mut pending = state.pending_files.lock().unwrap();
+    pending.files.extend(input_files);
+
+    if pending.timer_active {
+        // Timer already running, files added to queue
+        return;
+    }
+
+    pending.timer_active = true;
+    drop(pending);
+
+    let app_handle = app.clone();
+    let pending_files = state.pending_files.clone();
+
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(BATCH_DELAY_MS));
+
+        let mut pending = pending_files.lock().unwrap();
+        let files_to_open = std::mem::take(&mut pending.files);
+        pending.timer_active = false;
+        drop(pending);
+
+        if !files_to_open.is_empty() {
+            let state = app_handle.state::<AppState>();
+            handle_opened_files(&app_handle, &state, &files_to_open);
+        }
+    });
+}
+
 #[cfg(target_os = "macos")]
 fn handle_opened_urls(app: &AppHandle, state: &AppState, urls: Vec<tauri::Url>) {
     // Collect valid file paths from URLs.
@@ -601,6 +646,10 @@ fn handle_single_instance_args(app: &AppHandle, args: Vec<String>, cwd: String) 
     }
 
     if !input_files.is_empty() {
+        #[cfg(target_os = "windows")]
+        queue_files_for_batch_open(app, &state, input_files);
+
+        #[cfg(not(target_os = "windows"))]
         handle_opened_files(app, &state, &input_files);
     } else {
         // If no files were provided, focus the primary window if it exists.
@@ -1593,6 +1642,8 @@ pub fn run() {
         inspect: cli.inspect,
         window_order: Mutex::new(Vec::new()),
         top_level_path,
+        #[cfg(target_os = "windows")]
+        pending_files: Arc::new(Mutex::new(PendingFiles::default())),
     };
 
     let extra_args = cli.extra_args.clone();
