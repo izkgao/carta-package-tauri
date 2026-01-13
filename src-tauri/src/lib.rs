@@ -1411,19 +1411,55 @@ fn new_window_label() -> String {
 
 fn wrap_window_bounds(mut bounds: WindowBounds, monitor: &tauri::window::Monitor) -> WindowBounds {
     let work_area = monitor.work_area();
+    let monitor_size = monitor.size();
+    let monitor_pos = monitor.position();
     let scale = monitor.scale_factor();
-    let work_x = (work_area.position.x as f64 / scale) as i32;
-    let work_y = (work_area.position.y as f64 / scale) as i32;
-    let work_width = (work_area.size.width as f64 / scale) as u32;
-    let work_height = (work_area.size.height as f64 / scale) as u32;
 
-    let max_x = work_x + work_width as i32;
-    let max_y = work_y + work_height as i32;
-    let exceeds_x = bounds.x + bounds.width as i32 > max_x;
-    let exceeds_y = bounds.y + bounds.height as i32 > max_y;
-    if bounds.x < work_x || bounds.y < work_y || exceeds_x || exceeds_y {
-        bounds.x = work_x;
-        bounds.y = work_y;
+    // Convert all work area values to logical pixels with floating point precision
+    let work_x = work_area.position.x as f64 / scale;
+    let work_y = work_area.position.y as f64 / scale;
+    let work_width = work_area.size.width as f64 / scale;
+    let work_height = work_area.size.height as f64 / scale;
+
+    // Constrain window size to work area
+    if (bounds.width as f64) > work_width {
+        bounds.width = work_width.round() as u32;
+    }
+    if (bounds.height as f64) > work_height {
+        bounds.height = work_height.round() as u32;
+    }
+
+    // Max boundaries use monitor total size to reach the actual screen edges.
+    // On macOS, work_area height is often smaller than screen_height - menubar
+    // due to internal coordinate system differences in Tauri.
+    let max_x = (monitor_pos.x + monitor_size.width as i32) as f64 / scale;
+    let max_y = (monitor_pos.y + monitor_size.height as i32) as f64 / scale;
+
+    let bx = bounds.x as f64;
+    let by = bounds.y as f64;
+    let bw = bounds.width as f64;
+    let bh = bounds.height as f64;
+
+    // Use a small epsilon for comparisons to avoid floating point issues
+    let epsilon = 0.1;
+    let hits_x = bx < work_x - epsilon || bx + bw > max_x + epsilon;
+    let hits_y = by < work_y - epsilon || by + bh > max_y + epsilon;
+
+    if hits_x && hits_y {
+        bounds.x = work_x.round() as i32;
+        bounds.y = work_y.round() as i32;
+    } else if hits_x {
+        bounds.x = if bx < work_x {
+            work_x.round() as i32
+        } else {
+            (max_x - bw).round() as i32
+        };
+    } else if hits_y {
+        bounds.y = if by < work_y {
+            work_y.round() as i32
+        } else {
+            (max_y - bh).round() as i32
+        };
     }
     bounds
 }
