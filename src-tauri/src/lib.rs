@@ -122,7 +122,6 @@ struct AppState {
     window_url: String,
     inspect: bool,
     window_order: Mutex<Vec<String>>,
-    #[cfg(target_os = "macos")]
     top_level_path: PathBuf,
 }
 
@@ -507,7 +506,6 @@ fn ensure_base_dir_within_top_level(base_dir: PathBuf, top_level: &Path) -> Path
     }
 }
 
-#[cfg(target_os = "macos")]
 fn window_has_file(window: &WebviewWindow) -> bool {
     window
         .url()
@@ -588,23 +586,27 @@ fn handle_single_instance_args(app: &AppHandle, args: Vec<String>, cwd: String) 
     let mut input_files = Vec::new();
 
     if let Some(path) = cli.input_path
-        && let Ok(Some(p)) = resolve_input_file_path(Some(&path), Some(&cwd_path)) {
-            input_files.push(p);
-        }
+        && let Ok(Some(p)) = resolve_input_file_path(Some(&path), Some(&cwd_path))
+    {
+        input_files.push(p);
+    }
 
     for arg in &cli.extra_args {
         // Only consider non-flag arguments as potential files.
         if !arg.starts_with('-')
-            && let Ok(Some(p)) = resolve_input_file_path(Some(arg), Some(&cwd_path)) {
-                input_files.push(p);
-            }
+            && let Ok(Some(p)) = resolve_input_file_path(Some(arg), Some(&cwd_path))
+        {
+            input_files.push(p);
+        }
     }
 
     if !input_files.is_empty() {
         handle_opened_files(app, &state, &input_files);
     } else {
         // If no files were provided, focus the primary window if it exists.
-        if let Some(window) = focused_window(app).or_else(|| app.webview_windows().values().next().cloned()) {
+        if let Some(window) =
+            focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
+        {
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -1552,9 +1554,10 @@ pub fn run() {
     for arg in &cli.extra_args {
         // Collect additional positional arguments that appear to be valid files.
         if !arg.starts_with('-')
-            && let Ok(Some(path)) = resolve_input_file_path(Some(arg), None) {
-                input_files.push(path);
-            }
+            && let Ok(Some(path)) = resolve_input_file_path(Some(arg), None)
+        {
+            input_files.push(path);
+        }
     }
 
     let backend_port = match cli.port {
@@ -1589,8 +1592,7 @@ pub fn run() {
         window_url,
         inspect: cli.inspect,
         window_order: Mutex::new(Vec::new()),
-        #[cfg(target_os = "macos")]
-        top_level_path: top_level_path.clone(),
+        top_level_path,
     };
 
     let extra_args = cli.extra_args.clone();
@@ -1605,7 +1607,8 @@ pub fn run() {
         })
         .setup(move |app| {
             #[cfg(desktop)]
-            let _ = app.handle()
+            let _ = app
+                .handle()
                 .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
                     handle_single_instance_args(app, args, cwd);
                 }));
