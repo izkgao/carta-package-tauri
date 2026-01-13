@@ -380,7 +380,10 @@ fn resolve_base_directory(input_path: Option<&str>) -> AppResult<PathBuf> {
     }
 }
 
-fn resolve_input_file_path(input_path: Option<&str>) -> AppResult<Option<PathBuf>> {
+fn resolve_input_file_path(
+    input_path: Option<&str>,
+    base_dir: Option<&Path>,
+) -> AppResult<Option<PathBuf>> {
     let Some(path) = input_path else {
         return Ok(None);
     };
@@ -398,12 +401,14 @@ fn resolve_input_file_path(input_path: Option<&str>) -> AppResult<Option<PathBuf
         }
     }
 
-    let cwd = std::env::current_dir()?;
     let candidate = if Path::new(path).is_absolute() {
         PathBuf::from(path)
+    } else if let Some(base) = base_dir {
+        base.join(path)
     } else {
-        cwd.join(path)
+        std::env::current_dir()?.join(path)
     };
+
     let metadata = fs::metadata(&candidate)
         .map_err(|_| AppError::from("Requested file or directory does not exist"))?;
 
@@ -514,22 +519,12 @@ fn window_has_file(window: &WebviewWindow) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(target_os = "macos")]
-fn handle_opened_urls(app: &AppHandle, state: &AppState, urls: Vec<tauri::Url>) {
-    // Collect valid file paths from URLs.
-    let input_files: Vec<PathBuf> = urls
-        .into_iter()
-        .filter_map(|url| {
-            if url.scheme() != "file" {
-                return None;
-            }
-            let path = url.to_file_path().ok()?;
-            let input_file = resolve_input_file_path(Some(&path.to_string_lossy())).ok()??;
-            Some(input_file)
-        })
-        .collect();
+fn handle_opened_files(app: &AppHandle, state: &AppState, input_files: &[PathBuf]) {
+    if input_files.is_empty() {
+        return;
+    }
 
-    let Some(window_url) = build_window_url(&state.window_url, &input_files, &state.top_level_path)
+    let Some(window_url) = build_window_url(&state.window_url, input_files, &state.top_level_path)
     else {
         return;
     };
@@ -537,6 +532,8 @@ fn handle_opened_urls(app: &AppHandle, state: &AppState, urls: Vec<tauri::Url>) 
         return;
     };
     let windows = app.webview_windows();
+
+    // Check if any window is already showing this exact URL.
     if let Some(window) = windows
         .values()
         .find(|w| w.url().ok().as_ref() == Some(&target_url))
@@ -546,6 +543,7 @@ fn handle_opened_urls(app: &AppHandle, state: &AppState, urls: Vec<tauri::Url>) 
         return;
     }
 
+    // Reuse an empty window if available.
     let window_order = state.window_order.lock().unwrap().clone();
     if let Some(window) = window_order
         .iter()
@@ -557,7 +555,60 @@ fn handle_opened_urls(app: &AppHandle, state: &AppState, urls: Vec<tauri::Url>) 
         let _ = window.set_focus();
         return;
     }
+
+    // Otherwise create a new window.
     let _ = create_window(app, state, new_window_label(), Some(&window_url));
+}
+
+#[cfg(target_os = "macos")]
+fn handle_opened_urls(app: &AppHandle, state: &AppState, urls: Vec<tauri::Url>) {
+    // Collect valid file paths from URLs.
+    let input_files: Vec<PathBuf> = urls
+        .into_iter()
+        .filter_map(|url| {
+            if url.scheme() != "file" {
+                return None;
+            }
+            let path = url.to_file_path().ok()?;
+            resolve_input_file_path(Some(&path.to_string_lossy()), None)
+                .ok()
+                .flatten()
+        })
+        .collect();
+
+    handle_opened_files(app, state, &input_files);
+}
+
+fn handle_single_instance_args(app: &AppHandle, args: Vec<String>, cwd: String) {
+    let state = app.state::<AppState>();
+    let cwd_path = PathBuf::from(cwd);
+
+    // Skip the executable path.
+    let cli = parse_cli_args_from(args.into_iter().skip(1));
+    let mut input_files = Vec::new();
+
+    if let Some(path) = cli.input_path
+        && let Ok(Some(p)) = resolve_input_file_path(Some(&path), Some(&cwd_path)) {
+            input_files.push(p);
+        }
+
+    for arg in &cli.extra_args {
+        // Only consider non-flag arguments as potential files.
+        if !arg.starts_with('-')
+            && let Ok(Some(p)) = resolve_input_file_path(Some(arg), Some(&cwd_path)) {
+                input_files.push(p);
+            }
+    }
+
+    if !input_files.is_empty() {
+        handle_opened_files(app, &state, &input_files);
+    } else {
+        // If no files were provided, focus the primary window if it exists.
+        if let Some(window) = focused_window(app).or_else(|| app.webview_windows().values().next().cloned()) {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
 }
 
 fn build_window_url(base_url: &str, input_files: &[PathBuf], top_level: &Path) -> Option<String> {
@@ -1486,13 +1537,25 @@ pub fn run() {
             std::process::exit(1);
         }
     };
-    let input_file_path = match resolve_input_file_path(cli.input_path.as_deref()) {
+
+    let mut input_files = Vec::new();
+    if let Some(path) = match resolve_input_file_path(cli.input_path.as_deref(), None) {
         Ok(path) => path,
         Err(message) => {
             eprintln!("{}", message);
             std::process::exit(1);
         }
-    };
+    } {
+        input_files.push(path);
+    }
+
+    for arg in &cli.extra_args {
+        // Collect additional positional arguments that appear to be valid files.
+        if !arg.starts_with('-')
+            && let Ok(Some(path)) = resolve_input_file_path(Some(arg), None) {
+                input_files.push(path);
+            }
+    }
 
     let backend_port = match cli.port {
         Some(port) => port,
@@ -1516,8 +1579,7 @@ pub fn run() {
         }
     };
     base_dir = ensure_base_dir_within_top_level(base_dir, &top_level_path);
-    let input_files: &[PathBuf] = input_file_path.as_slice();
-    let initial_window_url = build_window_url(&window_url, input_files, &top_level_path)
+    let initial_window_url = build_window_url(&window_url, &input_files, &top_level_path)
         .unwrap_or_else(|| window_url.clone());
 
     let state = AppState {
@@ -1542,6 +1604,12 @@ pub fn run() {
             handle_menu_event(app, &state, event);
         })
         .setup(move |app| {
+            #[cfg(desktop)]
+            let _ = app.handle()
+                .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+                    handle_single_instance_args(app, args, cwd);
+                }));
+
             if cli.help || cli.version {
                 match run_backend_help(app.handle(), cli.version) {
                     Ok(()) => std::process::exit(0),
