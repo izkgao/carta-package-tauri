@@ -48,6 +48,7 @@ const MENU_NEW_WINDOW: &str = "new_window";
 const MENU_TOGGLE_DEVTOOLS: &str = "toggle_devtools";
 const MENU_TOGGLE_FULLSCREEN: &str = "toggle_fullscreen";
 const MENU_QUIT: &str = "quit";
+const MENU_CLOSE_WINDOW: &str = "close_window";
 
 #[derive(Debug, Default)]
 struct CliArgs {
@@ -1460,23 +1461,25 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         true,
         Some("F11"),
     )?;
+    let close_window = MenuItem::with_id(
+        app,
+        MENU_CLOSE_WINDOW,
+        "Close Window",
+        true,
+        Some("CmdOrCtrl+W"),
+    )?;
+    let quit = MenuItem::with_id(app, MENU_QUIT, "Quit CARTA", true, Some("CmdOrCtrl+Q"))?;
 
-    let app_menu_builder = SubmenuBuilder::new(app, &app.package_info().name)
+    let app_menu = SubmenuBuilder::new(app, &app.package_info().name)
         .item(&new_window)
         .separator()
         .item(&toggle_fullscreen)
         .separator()
         .item(&toggle_devtools)
-        .separator();
-
-    #[cfg(target_os = "linux")]
-    let app_menu = {
-        let quit = MenuItem::with_id(app, MENU_QUIT, "Quit CARTA", true, Some("Ctrl+Q"))?;
-        app_menu_builder.item(&quit).build()?
-    };
-
-    #[cfg(not(target_os = "linux"))]
-    let app_menu = app_menu_builder.quit().build()?;
+        .separator()
+        .item(&close_window)
+        .item(&quit)
+        .build()?;
 
     MenuBuilder::new(app)
         .item(&app_menu)
@@ -1514,6 +1517,7 @@ fn create_window(
     let window = WebviewWindowBuilder::new(app, label, url)
         .title(WINDOW_TITLE)
         .menu(menu)
+        .inner_size(bounds.width as f64, bounds.height as f64)
         .position(bounds.x as f64, bounds.y as f64)
         .build()?;
 
@@ -1559,6 +1563,15 @@ fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::Menu
             shutdown_backend(state);
             app.exit(0);
         }
+        MENU_CLOSE_WINDOW => {
+            if let Some(window) =
+                focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
+            {
+                let _ = window.set_focus();
+                let _ = window.close();
+            }
+        }
+
         _ => {}
     }
 }
