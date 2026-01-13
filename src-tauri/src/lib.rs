@@ -1343,7 +1343,10 @@ fn save_window_bounds(app: &AppHandle, window: &Window) {
     };
     let (Ok(pos), Ok(size), Ok(scale)) = (
         window.outer_position(),
+        #[cfg(not(target_os = "windows"))]
         window.outer_size(),
+        #[cfg(target_os = "windows")]
+        window.inner_size(),
         window.scale_factor(),
     ) else {
         return;
@@ -1374,7 +1377,10 @@ fn next_window_bounds(app: &AppHandle) -> WindowBounds {
         .or_else(|| app.webview_windows().values().next().cloned())
         .and_then(|w| {
             let pos = w.outer_position().ok()?;
+            #[cfg(not(target_os = "windows"))]
             let size = w.outer_size().ok()?;
+            #[cfg(target_os = "windows")]
+            let size = w.inner_size().ok()?;
             let scale = w.scale_factor().ok()?;
             let devtools_open = w.is_devtools_open();
             let bounds =
