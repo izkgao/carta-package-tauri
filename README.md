@@ -65,7 +65,7 @@ Build `carta-backend` with the appropriate `-DCartaUserFolderPrefix` flag:
     ```
     git clone https://github.com/CARTAvis/carta-backend.git
     cd carta-backend
-    git checkout release/4.0
+    git checkout release/5.0
     git submodule update --init --recursive
     mkdir build
     cd build
@@ -98,6 +98,7 @@ The `carta-frontend` production build can be prepared from source or downloaded 
     # Build carta-frontend
     git clone https://github.com/CARTAvis/carta-frontend.git
     cd carta-frontend
+    git checkout release/5.0
     git submodule update --init --recursive
     npm install
     npm run build-libs
