@@ -1572,14 +1572,10 @@ fn create_window(
     let menu = build_menu(app)?;
     let window = WebviewWindowBuilder::new(app, label, url)
         .title(WINDOW_TITLE)
+        .menu(menu)
         .inner_size(bounds.width as f64, bounds.height as f64)
-        .position(bounds.x as f64, bounds.y as f64);
-
-    if let Some(menu) = app.menu() {
-        builder = builder.menu(menu);
-    }
-
-    let window = builder.build()?;
+        .position(bounds.x as f64, bounds.y as f64)
+        .build()?;
 
     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
         bounds.width as f64,
