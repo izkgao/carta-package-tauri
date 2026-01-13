@@ -10,9 +10,6 @@ use std::{
 };
 
 #[cfg(target_os = "windows")]
-use std::{sync::Arc, thread};
-
-#[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -119,13 +116,6 @@ impl From<io::Error> for AppError {
 
 type AppResult<T> = Result<T, AppError>;
 
-#[cfg(target_os = "windows")]
-#[derive(Default)]
-struct PendingFiles {
-    files: Vec<PathBuf>,
-    timer_active: bool,
-}
-
 struct AppState {
     backend: Mutex<Option<Child>>,
     backend_port: u16,
@@ -133,9 +123,8 @@ struct AppState {
     window_url: String,
     inspect: bool,
     window_order: Mutex<Vec<String>>,
+    #[cfg(target_os = "macos")]
     top_level_path: PathBuf,
-    #[cfg(target_os = "windows")]
-    pending_files: Arc<Mutex<PendingFiles>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -519,6 +508,7 @@ fn ensure_base_dir_within_top_level(base_dir: PathBuf, top_level: &Path) -> Path
     }
 }
 
+#[cfg(target_os = "macos")]
 fn window_has_file(window: &WebviewWindow) -> bool {
     window
         .url()
@@ -530,6 +520,7 @@ fn window_has_file(window: &WebviewWindow) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "macos")]
 fn handle_opened_files(app: &AppHandle, state: &AppState, input_files: &[PathBuf]) {
     if input_files.is_empty() {
         return;
@@ -571,39 +562,6 @@ fn handle_opened_files(app: &AppHandle, state: &AppState, input_files: &[PathBuf
     let _ = create_window(app, state, new_window_label(), Some(&window_url));
 }
 
-#[cfg(target_os = "windows")]
-fn queue_files_for_batch_open(app: &AppHandle, state: &AppState, input_files: Vec<PathBuf>) {
-    const BATCH_DELAY_MS: u64 = 150;
-
-    let mut pending = state.pending_files.lock().unwrap();
-    pending.files.extend(input_files);
-
-    if pending.timer_active {
-        // Timer already running, files added to queue
-        return;
-    }
-
-    pending.timer_active = true;
-    drop(pending);
-
-    let app_handle = app.clone();
-    let pending_files = state.pending_files.clone();
-
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(BATCH_DELAY_MS));
-
-        let mut pending = pending_files.lock().unwrap();
-        let files_to_open = std::mem::take(&mut pending.files);
-        pending.timer_active = false;
-        drop(pending);
-
-        if !files_to_open.is_empty() {
-            let state = app_handle.state::<AppState>();
-            handle_opened_files(&app_handle, &state, &files_to_open);
-        }
-    });
-}
-
 #[cfg(target_os = "macos")]
 fn handle_opened_urls(app: &AppHandle, state: &AppState, urls: Vec<tauri::Url>) {
     // Collect valid file paths from URLs.
@@ -620,47 +578,44 @@ fn handle_opened_urls(app: &AppHandle, state: &AppState, urls: Vec<tauri::Url>) 
         })
         .collect();
 
-    handle_opened_files(app, state, &input_files);
-}
+    if input_files.is_empty() {
+        return;
+    }
 
-fn handle_single_instance_args(app: &AppHandle, args: Vec<String>, cwd: String) {
-    let state = app.state::<AppState>();
-    let cwd_path = PathBuf::from(cwd);
+    let Some(window_url) = build_window_url(&state.window_url, &input_files, &state.top_level_path)
+    else {
+        return;
+    };
+    let Ok(target_url) = tauri::Url::parse(&window_url) else {
+        return;
+    };
+    let windows = app.webview_windows();
 
-    // Skip the executable path.
-    let cli = parse_cli_args_from(args.into_iter().skip(1));
-    let mut input_files = Vec::new();
-
-    if let Some(path) = cli.input_path
-        && let Ok(Some(p)) = resolve_input_file_path(Some(&path), Some(&cwd_path))
+    // Check if any window is already showing this exact URL.
+    if let Some(window) = windows
+        .values()
+        .find(|w| w.url().ok().as_ref() == Some(&target_url))
     {
-        input_files.push(p);
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
     }
 
-    for arg in &cli.extra_args {
-        // Only consider non-flag arguments as potential files.
-        if !arg.starts_with('-')
-            && let Ok(Some(p)) = resolve_input_file_path(Some(arg), Some(&cwd_path))
-        {
-            input_files.push(p);
-        }
+    // Reuse an empty window if available.
+    let window_order = state.window_order.lock().unwrap().clone();
+    if let Some(window) = window_order
+        .iter()
+        .find_map(|label| windows.get(label).filter(|window| !window_has_file(window)))
+        .or_else(|| windows.values().find(|w| !window_has_file(w)))
+        && window.navigate(target_url).is_ok()
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
     }
 
-    if !input_files.is_empty() {
-        #[cfg(target_os = "windows")]
-        queue_files_for_batch_open(app, &state, input_files);
-
-        #[cfg(not(target_os = "windows"))]
-        handle_opened_files(app, &state, &input_files);
-    } else {
-        // If no files were provided, focus the primary window if it exists.
-        if let Some(window) =
-            focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
-        {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    }
+    // Otherwise create a new window.
+    let _ = create_window(app, state, new_window_label(), Some(&window_url));
 }
 
 fn build_window_url(base_url: &str, input_files: &[PathBuf], top_level: &Path) -> Option<String> {
@@ -1710,9 +1665,8 @@ pub fn run() {
         window_url,
         inspect: cli.inspect,
         window_order: Mutex::new(Vec::new()),
+        #[cfg(target_os = "macos")]
         top_level_path,
-        #[cfg(target_os = "windows")]
-        pending_files: Arc::new(Mutex::new(PendingFiles::default())),
     };
 
     let extra_args = cli.extra_args.clone();
@@ -1726,13 +1680,6 @@ pub fn run() {
             handle_menu_event(app, &state, event);
         })
         .setup(move |app| {
-            #[cfg(desktop)]
-            let _ = app
-                .handle()
-                .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-                    handle_single_instance_args(app, args, cwd);
-                }));
-
             if cli.help || cli.version {
                 match run_backend_help(app.handle(), cli.version) {
                     Ok(()) => std::process::exit(0),
