@@ -22,6 +22,8 @@ use tauri::{
 
 const DEFAULT_WINDOW_WIDTH: u32 = 1920;
 const DEFAULT_WINDOW_HEIGHT: u32 = 1080;
+const MIN_WINDOW_WIDTH: u32 = 400;
+const MIN_WINDOW_HEIGHT: u32 = 300;
 const WINDOW_OFFSET: i32 = 25;
 const WINDOW_STATE_FILE: &str = "window-state.json";
 const WINDOW_TITLE: &str = "CARTA";
@@ -87,6 +89,16 @@ impl WindowBounds {
     fn with_offset(mut self, offset: i32) -> Self {
         self.x += offset;
         self.y += offset;
+        self
+    }
+
+    fn clamp_min_size(mut self) -> Self {
+        if self.width < MIN_WINDOW_WIDTH {
+            self.width = MIN_WINDOW_WIDTH;
+        }
+        if self.height < MIN_WINDOW_HEIGHT {
+            self.height = MIN_WINDOW_HEIGHT;
+        }
         self
     }
 }
@@ -1289,7 +1301,7 @@ fn window_state_path(app: &AppHandle) -> Option<PathBuf> {
 fn load_window_bounds(app: &AppHandle) -> Option<WindowBounds> {
     let path = window_state_path(app)?;
     let contents = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&contents).ok()
+    serde_json::from_str(&contents).ok().map(WindowBounds::clamp_min_size)
 }
 
 fn save_window_bounds(app: &AppHandle, window: &Window) {
@@ -1312,6 +1324,7 @@ fn save_window_bounds(app: &AppHandle, window: &Window) {
         .map(|w| w.is_devtools_open())
         .unwrap_or(false);
     let bounds = WindowBounds::new(pos, size, scale, devtools_open);
+    let bounds = bounds.clamp_min_size();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
