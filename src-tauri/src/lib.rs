@@ -1453,14 +1453,22 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         accel_close_window,
         accel_quit,
     ) = if cfg!(target_os = "windows") {
-        (None, None, None, None, None)
+        (None, Some("Ctrl+Shift+I"), None, None, None)
+    } else if cfg!(target_os = "macos") {
+        (
+            Some("Cmd+N"),
+            Some("Alt+Cmd+I"),
+            Some("Ctrl+Cmd+F"),
+            Some("Cmd+W"),
+            Some("Cmd+Q"),
+        )
     } else {
         (
-            Some("CmdOrCtrl+N"),
-            Some("Alt+CmdOrCtrl+I"),
+            Some("Ctrl+N"),
+            Some("Alt+Ctrl+I"),
             Some("F11"),
-            Some("CmdOrCtrl+W"),
-            Some("CmdOrCtrl+Q"),
+            Some("Ctrl+W"),
+            Some("Ctrl+Q"),
         )
     };
 
