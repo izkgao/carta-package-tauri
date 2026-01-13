@@ -1478,35 +1478,53 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         .select_all()
         .build()?;
 
+    let (
+        accel_new_window,
+        accel_toggle_devtools,
+        accel_toggle_fullscreen,
+        accel_close_window,
+        accel_quit,
+    ) = if cfg!(target_os = "windows") {
+        (None, None, None, None, None)
+    } else {
+        (
+            Some("CmdOrCtrl+N"),
+            Some("Alt+CmdOrCtrl+I"),
+            Some("F11"),
+            Some("CmdOrCtrl+W"),
+            Some("CmdOrCtrl+Q"),
+        )
+    };
+
     let new_window = MenuItem::with_id(
         app,
         MENU_NEW_WINDOW,
         "New CARTA Window",
         true,
-        Some("CmdOrCtrl+N"),
+        accel_new_window,
     )?;
     let toggle_devtools = MenuItem::with_id(
         app,
         MENU_TOGGLE_DEVTOOLS,
         "Toggle DevTools",
         true,
-        Some("Alt+CmdOrCtrl+I"),
+        accel_toggle_devtools,
     )?;
     let toggle_fullscreen = MenuItem::with_id(
         app,
         MENU_TOGGLE_FULLSCREEN,
         "Toggle Fullscreen",
         true,
-        Some("F11"),
+        accel_toggle_fullscreen,
     )?;
     let close_window = MenuItem::with_id(
         app,
         MENU_CLOSE_WINDOW,
         "Close Window",
         true,
-        Some("CmdOrCtrl+W"),
+        accel_close_window,
     )?;
-    let quit = MenuItem::with_id(app, MENU_QUIT, "Quit CARTA", true, Some("CmdOrCtrl+Q"))?;
+    let quit = MenuItem::with_id(app, MENU_QUIT, "Quit CARTA", true, accel_quit)?;
 
     let app_menu = SubmenuBuilder::new(app, &app.package_info().name)
         .item(&new_window)
@@ -1554,10 +1572,14 @@ fn create_window(
     let menu = build_menu(app)?;
     let window = WebviewWindowBuilder::new(app, label, url)
         .title(WINDOW_TITLE)
-        .menu(menu)
         .inner_size(bounds.width as f64, bounds.height as f64)
-        .position(bounds.x as f64, bounds.y as f64)
-        .build()?;
+        .position(bounds.x as f64, bounds.y as f64);
+
+    if let Some(menu) = app.menu() {
+        builder = builder.menu(menu);
+    }
+
+    let window = builder.build()?;
 
     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
         bounds.width as f64,
