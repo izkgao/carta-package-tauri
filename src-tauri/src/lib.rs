@@ -1429,11 +1429,19 @@ fn wrap_window_bounds(mut bounds: WindowBounds, monitor: &tauri::window::Monitor
         bounds.height = work_height.round() as u32;
     }
 
-    // Max boundaries use monitor total size to reach the actual screen edges.
-    // On macOS, work_area height is often smaller than screen_height - menubar
-    // due to internal coordinate system differences in Tauri.
-    let max_x = (monitor_pos.x + monitor_size.width as i32) as f64 / scale;
-    let max_y = (monitor_pos.y + monitor_size.height as i32) as f64 / scale;
+    // Max boundaries:
+    // On macOS, we use monitor total size because work_area often has
+    // coordinate mismatches that prevent hitting the bottom edge in Tauri 2.0.
+    // On other platforms (Windows/Linux), we MUST use work_area to
+    // avoid overlapping the taskbar (menu bar).
+    let (max_x, max_y) = if cfg!(target_os = "macos") {
+        (
+            (monitor_pos.x + monitor_size.width as i32) as f64 / scale,
+            (monitor_pos.y + monitor_size.height as i32) as f64 / scale,
+        )
+    } else {
+        (work_x + work_width, work_y + work_height)
+    };
 
     let bx = bounds.x as f64;
     let by = bounds.y as f64;
