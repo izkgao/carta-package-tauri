@@ -120,9 +120,10 @@ struct AppState {
     backend_port: u16,
     backend_token: String,
     window_url: String,
-    top_level_path: PathBuf,
     inspect: bool,
     window_order: Mutex<Vec<String>>,
+    #[cfg(target_os = "macos")]
+    top_level_path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -584,9 +585,9 @@ fn relative_url_path(input_file: &Path, top_level: &Path) -> Option<String> {
     };
 
     #[cfg(not(target_os = "windows"))]
-    let relative = input_file.strip_prefix(top_level).ok()?;
+    let relative = input_file.strip_prefix(top_level).ok()?.to_path_buf();
 
-    let file_path = url_path_from_fs(relative);
+    let file_path = url_path_from_fs(&relative);
     (!file_path.is_empty()).then_some(file_path)
 }
 
@@ -1524,9 +1525,10 @@ pub fn run() {
         backend_port,
         backend_token,
         window_url,
-        top_level_path: top_level_path.clone(),
         inspect: cli.inspect,
         window_order: Mutex::new(Vec::new()),
+        #[cfg(target_os = "macos")]
+        top_level_path: top_level_path.clone(),
     };
 
     let extra_args = cli.extra_args.clone();
