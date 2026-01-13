@@ -1459,21 +1459,9 @@ fn wrap_window_bounds(mut bounds: WindowBounds, monitor: &tauri::window::Monitor
     let hits_x = bx < work_x - epsilon || bx + bw > max_x + epsilon;
     let hits_y = by < work_y - epsilon || by + bh > max_y + epsilon;
 
-    if hits_x && hits_y {
+    if hits_x || hits_y {
         bounds.x = work_x.round() as i32;
         bounds.y = work_y.round() as i32;
-    } else if hits_x {
-        bounds.x = if bx < work_x {
-            work_x.round() as i32
-        } else {
-            (max_x - bw).round() as i32
-        };
-    } else if hits_y {
-        bounds.y = if by < work_y {
-            work_y.round() as i32
-        } else {
-            (max_y - bh).round() as i32
-        };
     }
     bounds
 }
