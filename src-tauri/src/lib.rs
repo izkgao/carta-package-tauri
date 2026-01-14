@@ -45,9 +45,6 @@ const CONNECT_RETRY_MS: u64 = 100;
 
 const MENU_NEW_WINDOW: &str = "new_window";
 const MENU_TOGGLE_DEVTOOLS: &str = "toggle_devtools";
-const MENU_TOGGLE_FULLSCREEN: &str = "toggle_fullscreen";
-const MENU_QUIT: &str = "quit";
-const MENU_CLOSE_WINDOW: &str = "close_window";
 
 #[derive(Debug, Default)]
 struct CliArgs {
@@ -530,48 +527,6 @@ fn window_has_file(window: &WebviewWindow) -> bool {
                 .any(|(key, _)| key == "file" || key == "files")
         })
         .unwrap_or(false)
-}
-
-#[cfg(target_os = "macos")]
-fn handle_opened_files(app: &AppHandle, state: &AppState, input_files: &[PathBuf]) {
-    if input_files.is_empty() {
-        return;
-    }
-
-    let Some(window_url) = build_window_url(&state.window_url, input_files, &state.top_level_path)
-    else {
-        return;
-    };
-    let Ok(target_url) = tauri::Url::parse(&window_url) else {
-        return;
-    };
-    let windows = app.webview_windows();
-
-    // Check if any window is already showing this exact URL.
-    if let Some(window) = windows
-        .values()
-        .find(|w| w.url().ok().as_ref() == Some(&target_url))
-    {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return;
-    }
-
-    // Reuse an empty window if available.
-    let window_order = state.window_order.lock().unwrap().clone();
-    if let Some(window) = window_order
-        .iter()
-        .find_map(|label| windows.get(label).filter(|window| !window_has_file(window)))
-        .or_else(|| windows.values().find(|w| !window_has_file(w)))
-        && window.navigate(target_url).is_ok()
-    {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return;
-    }
-
-    // Otherwise create a new window.
-    let _ = create_window(app, state, new_window_label(), Some(&window_url));
 }
 
 #[cfg(target_os = "macos")]
@@ -1434,88 +1389,65 @@ fn wrap_window_bounds(mut bounds: WindowBounds, monitor: &tauri::window::Monitor
     bounds
 }
 
+// IPC Commands for frontend menu integration
+#[tauri::command]
+fn cmd_new_window(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let _ = create_window(&app, &state, new_window_label(), None);
+}
+
+#[tauri::command]
+fn cmd_toggle_fullscreen(window: WebviewWindow) {
+    toggle_fullscreen(&window);
+}
+
+#[tauri::command]
+fn cmd_toggle_devtools(window: WebviewWindow) {
+    toggle_devtools(&window);
+}
+
+#[tauri::command]
+fn cmd_close_window(window: WebviewWindow) {
+    let _ = window.close();
+}
+
+#[tauri::command]
+fn cmd_quit_app(app: AppHandle) {
+    let state = app.state::<AppState>();
+    shutdown_backend(&state);
+    app.exit(0);
+}
+
+#[cfg(target_os = "macos")]
 fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
-    let edit_menu = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
-        .separator()
-        .cut()
-        .copy()
-        .paste()
-        .separator()
-        .select_all()
-        .build()?;
-
-    let (
-        accel_new_window,
-        accel_toggle_devtools,
-        accel_toggle_fullscreen,
-        accel_close_window,
-        accel_quit,
-    ) = if cfg!(target_os = "windows") {
-        (None, Some("Ctrl+Shift+I"), None, None, None)
-    } else if cfg!(target_os = "macos") {
-        (
-            Some("Cmd+N"),
-            Some("Alt+Cmd+I"),
-            Some("Ctrl+Cmd+F"),
-            Some("Cmd+W"),
-            Some("Cmd+Q"),
-        )
-    } else {
-        (
-            Some("Ctrl+N"),
-            Some("Alt+Ctrl+I"),
-            Some("F11"),
-            Some("Ctrl+W"),
-            Some("Ctrl+Q"),
-        )
-    };
-
     let new_window = MenuItem::with_id(
         app,
         MENU_NEW_WINDOW,
         "New CARTA Window",
         true,
-        accel_new_window,
+        Some("Cmd+N"),
     )?;
     let toggle_devtools = MenuItem::with_id(
         app,
         MENU_TOGGLE_DEVTOOLS,
         "Toggle DevTools",
         true,
-        accel_toggle_devtools,
+        Some("Alt+Cmd+I"),
     )?;
-    let toggle_fullscreen = MenuItem::with_id(
-        app,
-        MENU_TOGGLE_FULLSCREEN,
-        "Toggle Fullscreen",
-        true,
-        accel_toggle_fullscreen,
-    )?;
-    let close_window = MenuItem::with_id(
-        app,
-        MENU_CLOSE_WINDOW,
-        "Close Window",
-        true,
-        accel_close_window,
-    )?;
-    let quit = MenuItem::with_id(app, MENU_QUIT, "Quit CARTA", true, accel_quit)?;
 
     let app_menu = SubmenuBuilder::new(app, &app.package_info().name)
         .item(&new_window)
         .separator()
-        .item(&toggle_fullscreen)
+        .fullscreen()
         .separator()
         .item(&toggle_devtools)
         .separator()
-        .item(&close_window)
-        .item(&quit)
+        .close_window()
+        .quit()
         .build()?;
 
     MenuBuilder::new(app)
         .item(&app_menu)
-        .item(&edit_menu)
         .build()
 }
 
@@ -1545,13 +1477,18 @@ fn create_window(
         .map(ToString::to_string)
         .unwrap_or_else(|| state.window_url.clone());
     let url = WebviewUrl::App(url.into());
-    let menu = build_menu(app)?;
-    let window = WebviewWindowBuilder::new(app, label, url)
+    let mut builder = WebviewWindowBuilder::new(app, label, url)
         .title(WINDOW_TITLE)
-        .menu(menu)
         .inner_size(bounds.width as f64, bounds.height as f64)
-        .position(bounds.x as f64, bounds.y as f64)
-        .build()?;
+        .position(bounds.x as f64, bounds.y as f64);
+
+    #[cfg(target_os = "macos")]
+    {
+        let menu = build_menu(app)?;
+        builder = builder.menu(menu);
+    }
+
+    let window = builder.build()?;
 
     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
         bounds.width as f64,
@@ -1570,6 +1507,7 @@ fn create_window(
     Ok(window)
 }
 
+#[cfg(target_os = "macos")]
 fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::MenuEvent) {
     match event.id().as_ref() {
         MENU_NEW_WINDOW => {
@@ -1577,33 +1515,12 @@ fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::Menu
         }
         MENU_TOGGLE_DEVTOOLS => {
             if let Some(window) =
-                focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
+                focused_window(app)
             {
                 let _ = window.set_focus();
                 toggle_devtools(&window);
             }
         }
-        MENU_TOGGLE_FULLSCREEN => {
-            if let Some(window) =
-                focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
-            {
-                let _ = window.set_focus();
-                toggle_fullscreen(&window);
-            }
-        }
-        MENU_QUIT => {
-            shutdown_backend(state);
-            app.exit(0);
-        }
-        MENU_CLOSE_WINDOW => {
-            if let Some(window) =
-                focused_window(app).or_else(|| app.webview_windows().values().next().cloned())
-            {
-                let _ = window.set_focus();
-                let _ = window.close();
-            }
-        }
-
         _ => {}
     }
 }
@@ -1691,15 +1608,28 @@ pub fn run() {
     };
 
     let extra_args = cli.extra_args.clone();
-    let app = tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![])
-        .menu(build_menu)
-        .on_menu_event(|app, event| {
-            let state = app.state::<AppState>();
-            handle_menu_event(app, &state, event);
-        })
+        .invoke_handler(tauri::generate_handler![
+            cmd_new_window,
+            cmd_toggle_fullscreen,
+            cmd_toggle_devtools,
+            cmd_close_window,
+            cmd_quit_app
+        ]);
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .menu(build_menu)
+            .on_menu_event(|app, event| {
+                let state = app.state::<AppState>();
+                handle_menu_event(app, &state, event);
+            });
+    }
+
+    let app = builder
         .setup(move |app| {
             if cli.help || cli.version {
                 match run_backend_help(app.handle(), cli.version) {
