@@ -1496,6 +1496,11 @@ fn create_window(
         builder = builder.menu(menu);
     }
 
+    // Disable browser context menu (reload, inspect element, etc.)
+    builder = builder.initialization_script(
+        r#"document.addEventListener('contextmenu', function(e) { e.preventDefault(); });"#,
+    );
+
     let window = builder.build()?;
 
     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
