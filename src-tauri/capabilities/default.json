@@ -3,8 +3,15 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": ["*"],
+  "remote": {
+    "urls": ["http://localhost:*/*", "http://127.0.0.1:*/*"]
+  },
   "permissions": [
     "core:default",
+    "core:webview:allow-webview-close",
+    "core:webview:allow-webview-hide",
+    "core:webview:allow-webview-show",
+    "core:webview:allow-set-webview-focus",
     "opener:default"
   ]
 }
