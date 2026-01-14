@@ -44,6 +44,7 @@ const CONNECT_TIMEOUT_MS: u64 = 250;
 const CONNECT_RETRY_MS: u64 = 100;
 
 const MENU_NEW_WINDOW: &str = "new_window";
+const MENU_TOGGLE_FULLSCREEN: &str = "toggle_fullscreen";
 const MENU_TOGGLE_DEVTOOLS: &str = "toggle_devtools";
 
 #[derive(Debug, Default)]
@@ -1427,6 +1428,13 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
         true,
         Some("Cmd+N"),
     )?;
+    let toggle_fullscreen = MenuItem::with_id(
+        app,
+        MENU_TOGGLE_FULLSCREEN,
+        "Toggle Fullscreen",
+        true,
+        Some("Ctrl+Cmd+F"),
+    )?;
     let toggle_devtools = MenuItem::with_id(
         app,
         MENU_TOGGLE_DEVTOOLS,
@@ -1438,7 +1446,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu
     let app_menu = SubmenuBuilder::new(app, &app.package_info().name)
         .item(&new_window)
         .separator()
-        .fullscreen()
+        .item(&toggle_fullscreen)
         .separator()
         .item(&toggle_devtools)
         .separator()
@@ -1512,6 +1520,11 @@ fn handle_menu_event(app: &AppHandle, state: &AppState, event: tauri::menu::Menu
     match event.id().as_ref() {
         MENU_NEW_WINDOW => {
             let _ = create_window(app, state, new_window_label(), None);
+        }
+        MENU_TOGGLE_FULLSCREEN => {
+            if let Some(window) = focused_window(app) {
+                toggle_fullscreen(&window);
+            }
         }
         MENU_TOGGLE_DEVTOOLS => {
             if let Some(window) =
